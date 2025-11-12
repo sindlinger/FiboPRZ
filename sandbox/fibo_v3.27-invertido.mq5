@@ -258,7 +258,7 @@ void AddLines(Pivot &seq[], int depthCode, int Ntake,
    int sz = ArraySize(seq);
    if(sz<2) return;
    int start = MathMax(1, sz-Ntake);
-   for(int i=start; i<sz; i++)
+   for(int i=sz-1; i>=start; i--)
    {
       int      typ     = seq[i].type;
       double   prc     = seq[i].price;
@@ -342,7 +342,7 @@ void DrawLegs(Pivot &seq[], int depthCode, int Ntake, int maxLegsLocal)
    if(sz<2) return;
    int start = MathMax(1, sz-Ntake);
    int cnt=0;
-   for(int i=start;i<sz;i++)
+   for(int i=sz-1;i>=start;i--)
    {
       if(cnt>=maxLegsLocal) break;
       string nm = StringFormat("%s%d_%d", PREFIX_BUGLG, depthCode, i);
@@ -361,7 +361,7 @@ void DrawLegsWindow(Pivot &seq[], int depthCode, int Ntake, int maxLegsLocal, da
    if(sz<2) return;
    int start = MathMax(1, sz-Ntake);
    int cnt=0;
-   for(int i=start;i<sz;i++)
+   for(int i=sz-1;i>=start;i--)
    {
       if(seq[i].time < tMin) continue; // ignora segmentos muito antigos (fora da janela à direita)
       if(cnt>=maxLegsLocal) break;
