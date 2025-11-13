@@ -47,12 +47,12 @@ public:
       for(int k=0;k<viewCount;k++){
          int idx=view_idx[k];
          if(idx<0 || idx>=total_items) continue;
-         const FibItem &item = items[idx];
+         const FibItem item = items[idx];
          double priceToDraw = item.price;
          color col = (item.is_expansion ? InpExpandLineColor : InpRetraceLineColor);
          string ln = BuildPriceLineObjectName(item, drawn);
          g_overlay.UpsertPriceSegment(ln, 0, 0, priceToDraw, col, lineWidth);
-         ObjectSetString(ChartID(), ln, OBJPROP_COMMENT, BuildPriceLineComment(item));
+         ObjectSetString(ChartID(), ln, OBJPROP_TEXT, BuildPriceLineComment(item));
          g_overlay.RecordPriceLineName(ln);
 
          if(InpShowLabels){
@@ -85,12 +85,12 @@ public:
          if(idx>=maskSize) continue;
          if(!cluster.member_mask[idx]) continue;
 
-         const FibItem &item = items[idx];
+         const FibItem item = items[idx];
          double priceToDraw = item.price;
          color col = (item.is_expansion ? InpExpandLineColor : InpRetraceLineColor);
          string ln = BuildPriceLineObjectName(item, drawn);
          g_overlay.UpsertPriceSegment(ln, 0, 0, priceToDraw, col, lineWidth);
-         ObjectSetString(ChartID(), ln, OBJPROP_COMMENT, BuildPriceLineComment(item));
+         ObjectSetString(ChartID(), ln, OBJPROP_TEXT, BuildPriceLineComment(item));
          g_overlay.RecordPriceLineName(ln);
 
          if(InpShowLabels){
@@ -110,7 +110,7 @@ public:
       for(int i=0;i<view_count;i++){
          int idx=view_idx[i];
          if(idx<0 || idx>=ArraySize(items)) continue;
-         const FibItem &it = items[idx];
+         const FibItem it = items[idx];
          string nm = G_PREF_TF + "DOT_" + IntegerToString(drawn_dot++);
          g_overlay.UpsertText(nm, it.t, it.price, ".", InpTimeDotColor, InpTimeDotFontSize);
          if(InpShowTimeVLines){

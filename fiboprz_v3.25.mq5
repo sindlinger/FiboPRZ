@@ -717,7 +717,7 @@ int OnCalculate(const int rates_total,
 
    g_pivot_pipeline.Configure(pipelineCfg);
    bool price_pipeline_ready = g_pivot_pipeline.Build(high, low, time, rates_total);
-   const PricePipelineResult &pricePipeline = g_pivot_pipeline.Result();
+   PricePipelineResult pricePipeline = g_pivot_pipeline.Result();
 
    g_overlay.DrawZigZagOverlay(g_ctx.zz_handle,
                      InpShowZigZagPrimary,
@@ -801,7 +801,7 @@ int OnCalculate(const int rates_total,
       g_cluster_manager.Analyze(g_ctx.all, g_ctx.all_total,
                                 g_ctx.view_price, ArraySize(g_ctx.view_price),
                                 clusterCfg);
-      const ClusterResult &clusterRes = g_cluster_manager.Result();
+      ClusterResult clusterRes = g_cluster_manager.Result();
 
       g_ctx.prz_count = clusterRes.zone_count;
       ArrayResize(g_ctx.prz, clusterRes.zone_count);

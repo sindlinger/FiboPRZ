@@ -101,7 +101,7 @@ public:
       return (visible>0);
    }
 
-   const ClusterResult& Result() const { return m_result; }
+   ClusterResult Result() const { return m_result; }
 
 private:
    ClusterResult m_result;

@@ -72,5 +72,5 @@ public:
                                 m_result.price_lines, m_result.price_count);
    }
 
-   const PricePipelineResult& Result() const { return m_result; }
+   PricePipelineResult Result() const { return m_result; }
 };
