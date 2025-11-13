@@ -1,5 +1,4 @@
 // Cluster analysis helpers
-#pragma once
 
 struct ClusterResult
 {

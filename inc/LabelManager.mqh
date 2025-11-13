@@ -1,5 +1,4 @@
 // Label slot management
-#pragma once
 
 extern FiboContext g_ctx;
 

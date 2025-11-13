@@ -1,5 +1,4 @@
 // Rendering logic (price/time/debug)
-#pragma once
 
 extern FiboContext g_ctx;
 extern ChartOverlayService g_overlay;

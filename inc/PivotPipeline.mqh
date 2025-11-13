@@ -1,5 +1,4 @@
 // Pivot pipeline definitions
-#pragma once
 
 struct PipelineConfig
 {

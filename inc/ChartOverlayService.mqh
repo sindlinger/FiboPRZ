@@ -1,5 +1,4 @@
 // Chart overlay utilities (all Object* mutations)
-#pragma once
 
 extern FiboContext g_ctx;
 
