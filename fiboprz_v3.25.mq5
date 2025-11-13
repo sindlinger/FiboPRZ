@@ -5,12 +5,30 @@
 #property indicator_chart_window
 #property indicator_plots 0
 
-// ========================= Inputs =========================
+// Core types and utils first, so includes podem ir ao topo
+#include "inc/Types.mqh"
 
-// -- Enumeradores relacionados aos inputs --
-enum ENUM_PRICE_MODE { PRICE_CLUSTER=0, PRICE_RAW=1 };
-enum ENUM_LABEL_DISPLAY_MODE { LABEL_MODE_NORMAL=0, LABEL_MODE_DEBUG=1 };
-enum ENUM_PRICE_LINE_TRIM_MODE { PRICE_LINE_TRIM_OLDEST=0, PRICE_LINE_TRIM_FARTHEST=1 };
+// Prototypes necessários por includes
+void Dbg(const string &s);
+int PriceDigits();
+// Utilidades
+#include "inc/FiboUtils.mqh"
+// Demais módulos
+#include "inc/LabelManager.mqh"
+#include "inc/ClusterManager.mqh"
+#include "inc/ChartOverlayService.mqh"
+#include "inc/Renderer.mqh"
+#include "inc/PivotPipeline.mqh"
+
+// Singletons globais
+FiboContext g_ctx;
+PivotPipeline g_pivot_pipeline;
+LabelManager g_label_manager;
+ClusterManager g_cluster_manager;
+Renderer g_renderer;
+ChartOverlayService g_overlay;
+
+// ========================= Inputs =========================
 
 input group   "ZigZag Primário";
 input int      InpZZ_Depth                   = 12;    // ZigZag: Depth
@@ -90,38 +108,6 @@ input int      InpSummaryFontSize        = 14;
 input bool     InpDebugLog               = false;
 input int      InpDebugPrintLimit        = 200;
 
-// ========================= Tipos =========================
-struct Pivot { double price; datetime time; bool is_high; int index; };
-struct LegSeg {
-   double p1,p2;
-   datetime t1,t2;
-   bool is_up;
-   int id;
-   bool a_is_high;
-   bool b_is_high;
-   int idx_a;
-   int idx_b;
-};
-
-struct LineItem { double price; double ratio; bool is_expansion; bool is_up; int leg_id; datetime tB; };
-// Tempo carrega o preço do pivô B (priceB) p/ desenhar no MESMO nível:
-struct TimeItem { datetime t; double ratio; int leg_id; bool forward; double priceB; };
-
-enum ENUM_FIB_KIND { FIBK_PRICE=0, FIBK_TIME=1 };
-struct FibItem {
-   ENUM_FIB_KIND kind;
-   double   ratio;
-   int      leg_id;
-   // preço
-   double   price; bool is_expansion; bool is_up; datetime tB;
-   // tempo
-   datetime t; bool forward;
-};
-
-// PRZ (opcional)
-struct PRZ { double low; double high; int count; double center; }; // count = níveis únicos no cluster
-struct ClusterLegPick { int leg_id; int fib_idx; double dist_center; };
-
 // ========================= Globais =========================
 const string    G_PREF_LINE = "FCZLINE_";
 const string    G_PREF_LBL  = "FCZLBL_";
@@ -139,127 +125,6 @@ const string    G_PREF_DBG_EXP_LBL = "FCZDBG_EXPLBL_";
 const string    G_PREF_DBG_TIME = "FCZDBG_TIME_DOT_";
 const string    G_PREF_DBG_TIME_VL = "FCZDBG_TIME_VL_";
 
-struct VisualConfig
-{
-   bool show_legs;
-   color leg_up_color;
-   color leg_down_color;
-   int leg_width;
-   int right_text_margin_bars;
-
-   VisualConfig()
-   {
-      show_legs = true;
-      leg_up_color = clrLime;
-      leg_down_color = clrOrange;
-      leg_width = 1;
-      right_text_margin_bars = 0;
-   }
-};
-
-struct FiboContext
-{
-   double fib_ratios[];
-   double time_ratios[];
-   string price_line_names[];
-
-   int prev_leg_count;
-   int prev_tf_count;
-   int prev_tfvl_count;
-   int prev_zz1_count;
-   int prev_zz2_count;
-   int prev_zz1_piv_count;
-   int prev_zz2_piv_count;
-   int prev_dbg_ret_count;
-   int prev_dbg_exp_count;
-   int prev_dbg_time_dot_count;
-   int prev_dbg_time_vl_count;
-
-   int dbg_prints;
-   int price_digits;
-   ENUM_LABEL_DISPLAY_MODE prev_label_mode;
-
-   LineItem price_all[];
-   int price_total;
-
-   TimeItem time_all[];
-   int time_total;
-
-   FibItem all[];
-   int all_total;
-   int view_price[];
-   int view_time[];
-
-   PRZ prz[];
-   int prz_count;
-
-   int retrace_total;
-   int expansion_total;
-   int visible_cluster_lines;
-   int pivot_total;
-   int pivot_tops;
-   int pivot_bottoms;
-   int leg_total;
-
-   int zz_handle;
-   int zz2_handle;
-
-   string label_slot_identity[];
-   bool   label_slot_used[];
-
-   void Reset()
-   {
-      ArrayResize(fib_ratios, 0);
-      ArrayResize(time_ratios, 0);
-      ArrayResize(price_line_names, 0);
-
-      prev_leg_count = 0;
-      prev_tf_count = 0;
-      prev_tfvl_count = 0;
-      prev_zz1_count = 0;
-      prev_zz2_count = 0;
-      prev_zz1_piv_count = 0;
-      prev_zz2_piv_count = 0;
-      prev_dbg_ret_count = 0;
-      prev_dbg_exp_count = 0;
-      prev_dbg_time_dot_count = 0;
-      prev_dbg_time_vl_count = 0;
-
-      dbg_prints = 0;
-      price_digits = -1;
-      prev_label_mode = LABEL_MODE_NORMAL;
-
-      ArrayResize(price_all, 0);
-      price_total = 0;
-      ArrayResize(time_all, 0);
-      time_total = 0;
-      ArrayResize(all, 0);
-      all_total = 0;
-      ArrayResize(view_price, 0);
-      ArrayResize(view_time, 0);
-
-      ArrayResize(prz, 0);
-      prz_count = 0;
-
-      retrace_total = 0;
-      expansion_total = 0;
-      visible_cluster_lines = 0;
-      pivot_total = 0;
-      pivot_tops = 0;
-      pivot_bottoms = 0;
-      leg_total = 0;
-
-      zz_handle = INVALID_HANDLE;
-      zz2_handle = INVALID_HANDLE;
-
-      ArrayResize(label_slot_identity, 0);
-      ArrayResize(label_slot_used, 0);
-   }
-};
-
-
-// includes e singletons movidos para depois da FiboUtils para respeitar ordem
-
 // ========================= Utils =========================
 void Dbg(const string &s){ if(!InpDebugLog) return; if(g_ctx.dbg_prints>=InpDebugPrintLimit) return; Print(s); g_ctx.dbg_prints++; }
 
@@ -274,70 +139,7 @@ int PriceDigits()
    return g_ctx.price_digits;
 }
 
-class FiboUtils
-{
-public:
-   static string Trim(const string &v)
-   {
-      string r=v;
-      StringTrimLeft(r);
-      StringTrimRight(r);
-      return r;
-   }
-
-   static string TrimTrailingZeros(const string &value)
-   {
-      string out=value;
-      int len=StringLen(out);
-      while(len>0 && StringGetCharacter(out,len-1)=='0')
-      {
-         out=StringSubstr(out,0,len-1);
-         len--;
-      }
-      if(len>0 && StringGetCharacter(out,len-1)=='.')
-         out=StringSubstr(out,0,len-1);
-      if(StringLen(out)==0)
-         return "0";
-      return out;
-   }
-
-   static string FormatPrice(double value){ return DoubleToString(value, PriceDigits()); }
-   static string FormatPercentValue(double value){ return TrimTrailingZeros(DoubleToString(value, 8)); }
-   static string FormatRatioUnit(double ratio){ return TrimTrailingZeros(DoubleToString(ratio, 8)); }
-   static string FormatRatioAsPercent(double ratio){ return TrimTrailingZeros(DoubleToString(ratio*100.0, 8)); }
-   static string FormatGenericValue(double value, int digits)
-   {
-      int useDigits = (digits<0 ? 0 : digits);
-      return TrimTrailingZeros(DoubleToString(value, useDigits));
-   }
-
-   static bool ParseRatiosTo(const string &text, double &arr[])
-   {
-      ArrayResize(arr,0);
-      string tok[]; int c=StringSplit(text,',',tok);
-      if(c<=0) return false;
-      for(int i=0;i<c;i++){ string t=Trim(tok[i]); if(StringLen(t)==0) continue;
-         double r=StringToDouble(t); if(r<=0.0) continue;
-         int n=ArraySize(arr)+1; ArrayResize(arr,n); arr[n-1]=r; }
-      return ArraySize(arr)>0;
-   }
-
-   static bool IsSeries(const datetime &time[],int total){ return (total>1 && time[0]>time[1]); }
-};
-
-// Após definir FiboUtils (usado por includes), agora importamos módulos e declaramos singletons
-#include "inc/PivotPipeline.mqh"
-#include "inc/LabelManager.mqh"
-#include "inc/ClusterManager.mqh"
-#include "inc/ChartOverlayService.mqh"
-#include "inc/Renderer.mqh"
-
-FiboContext g_ctx;
-PivotPipeline g_pivot_pipeline;
-LabelManager g_label_manager;
-ClusterManager g_cluster_manager;
-Renderer g_renderer;
-ChartOverlayService g_overlay;
+//
 
 string BuildPriceLineObjectName(const FibItem &item, int seq)
 {
