@@ -258,19 +258,7 @@ struct FiboContext
 };
 
 
-#include "inc/PivotPipeline.mqh"
-#include "inc/LabelManager.mqh"
-#include "inc/ClusterManager.mqh"
-#include "inc/ChartOverlayService.mqh"
-#include "inc/Renderer.mqh"
-
-
-FiboContext g_ctx;
-PivotPipeline g_pivot_pipeline;
-LabelManager g_label_manager;
-ClusterManager g_cluster_manager;
-Renderer g_renderer;
-ChartOverlayService g_overlay;
+// includes e singletons movidos para depois da FiboUtils para respeitar ordem
 
 // ========================= Utils =========================
 void Dbg(const string &s){ if(!InpDebugLog) return; if(g_ctx.dbg_prints>=InpDebugPrintLimit) return; Print(s); g_ctx.dbg_prints++; }
@@ -336,6 +324,20 @@ public:
 
    static bool IsSeries(const datetime &time[],int total){ return (total>1 && time[0]>time[1]); }
 };
+
+// Após definir FiboUtils (usado por includes), agora importamos módulos e declaramos singletons
+#include "inc/PivotPipeline.mqh"
+#include "inc/LabelManager.mqh"
+#include "inc/ClusterManager.mqh"
+#include "inc/ChartOverlayService.mqh"
+#include "inc/Renderer.mqh"
+
+FiboContext g_ctx;
+PivotPipeline g_pivot_pipeline;
+LabelManager g_label_manager;
+ClusterManager g_cluster_manager;
+Renderer g_renderer;
+ChartOverlayService g_overlay;
 
 string BuildPriceLineObjectName(const FibItem &item, int seq)
 {
