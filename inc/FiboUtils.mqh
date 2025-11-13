@@ -1,7 +1,6 @@
 // Utility helpers for formatting and parsing
 
-// Forward declaration for dependency in FormatPrice
-int PriceDigits();
+// Uses PriceDigits() declared by the main indicator before includes
 
 class FiboUtils
 {
