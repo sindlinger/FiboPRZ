@@ -441,9 +441,9 @@ void BuildLegsFromPivots(const Pivot &piv[],int piv_count,int legs_to_use, LegSe
    {
       Pivot pA = piv[i];
       Pivot pB = piv[i+1];
-      PrintFormat("Leg %d: A(idx=%d time=%s price=%g high=%s) B(idx=%d time=%s price=%g high=%s)",
-                  built, pA.index, TimeToString(pA.time), pA.price, pA.is_high ? "topo":"fundo",
-                  pB.index, TimeToString(pB.time), pB.price, pB.is_high ? "topo":"fundo");
+      Dbg(StringFormat("Leg %d: A(idx=%d time=%s price=%g high=%s) B(idx=%d time=%s price=%g high=%s)",
+                       built, pA.index, TimeToString(pA.time), pA.price, pA.is_high ? "topo":"fundo",
+                       pB.index, TimeToString(pB.time), pB.price, pB.is_high ? "topo":"fundo"));
 
       // precisa ser Topo->Fundo ou vice-versa para haver perna
       if(pA.is_high == pB.is_high){
