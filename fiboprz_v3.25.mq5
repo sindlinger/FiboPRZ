@@ -1099,6 +1099,8 @@ void CapturePivotStats(const Pivot &piv[], int piv_count)
 int OnInit()
 {
    g_ctx.Reset();
+   // Nome curto exibido no MT5 (independente do nome do arquivo)
+   IndicatorSetString(INDICATOR_SHORTNAME, "FiboPRZ 3.25");
    if(!FiboUtils::ParseRatiosTo(InpFibRatios, g_ctx.fib_ratios)){ Print("Fibo: não foi possível interpretar as razões de PREÇO."); return INIT_FAILED; }
    FiboUtils::ParseRatiosTo(InpTimeFibRatios, g_ctx.time_ratios);
    g_overlay.ClearByPrefix("FCZ");
