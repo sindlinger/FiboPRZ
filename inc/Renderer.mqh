@@ -56,7 +56,7 @@ public:
          g_overlay.RecordPriceLineName(ln);
 
          if(InpShowLabels){
-            string lbl = BuildLineLabelText(item);
+            string lbl = BuildLabelForMode(item, priceToDraw);
             string identBase = BuildPriceLabelIdentity(item);
             int slotIdx = labels.AcquireSlot(identBase);
             labels.MaintainPriceLabels(item, slotIdx, identBase, priceToDraw, lbl, col, labelLeft, labelRight);
@@ -94,7 +94,7 @@ public:
          g_overlay.RecordPriceLineName(ln);
 
          if(InpShowLabels){
-            string lbl = BuildLineLabelText(item);
+            string lbl = BuildLabelForMode(item, priceToDraw);
             string identBase = BuildPriceLabelIdentity(item);
             int slotIdx = labels.AcquireSlot(identBase);
             labels.MaintainPriceLabels(item, slotIdx, identBase, priceToDraw, lbl, col, labelLeft, labelRight);
@@ -144,6 +144,33 @@ private:
    datetime m_label_left;
    datetime m_label_right;
    bool     m_has_label_bounds;
+
+   string BuildLabelForMode(const FibItem &item, double price) const
+   {
+      if(InpPriceLabelMode==LABEL_MODE_TRADING)
+         return BuildTradingLabel(item, price);
+      return BuildLineLabelText(item);
+   }
+
+   string BuildTradingLabel(const FibItem &item, double price) const
+   {
+      double tol = LabelManager::PriceTolerance();
+      int count = 1;
+      double span = 0.0;
+      for(int i=0;i<g_ctx.prz_count;i++)
+      {
+         const PRZ &zone = g_ctx.prz[i];
+         if(price >= zone.low - tol && price <= zone.high + tol)
+         {
+            count = MathMax(1, zone.count);
+            span = MathAbs(zone.high - zone.low);
+            break;
+         }
+      }
+      string spanText = (span>0.0 ? FiboUtils::FormatPrice(span) : "?");
+      string legInfo = (InpLabelShowLeg ? StringFormat(" L%d", item.leg_id) : "");
+      return StringFormat("Lines:%d Span:%s%s", count, spanText, legInfo);
+   }
 
    void ResetFrame()
    {
