@@ -216,11 +216,17 @@ private:
             }
          }
          int uniqueCnt = ArraySize(picks);
-         if(uniqueCnt < min_lines) continue;
+         if(totalCnt < min_lines) continue;
 
-         for(int m=0;m<uniqueCnt;m++){
-            int all_idx = picks[m].fib_idx;
-            if(all_idx>=0 && all_idx<ArraySize(m_result.member_mask)) m_result.member_mask[all_idx]=true;
+         for(int bucket=s; bucket<e; ++bucket)
+         {
+            int startIdx = bucketStart[bucket];
+            int len = bucketLen[bucket];
+            for(int k=0;k<len;k++){
+               int all_idx = m_sorted_indices[startIdx + k];
+               if(all_idx>=0 && all_idx<ArraySize(m_result.member_mask))
+                  m_result.member_mask[all_idx]=true;
+            }
          }
 
          int ci = ArraySize(cand)+1;
@@ -258,7 +264,7 @@ private:
             z.low = best.low - pad;
             z.high = best.high + pad;
             z.center = (z.low+z.high)*0.5;
-            z.count = best.unique_cnt;
+            z.count = best.total_cnt;
             int m=ArraySize(m_result.zones)+1; ArrayResize(m_result.zones,m); m_result.zones[m-1]=z;
 
             best=cand[i];
@@ -272,7 +278,7 @@ private:
          z.low = best.low - pad;
          z.high = best.high + pad;
          z.center = (z.low+z.high)*0.5;
-         z.count = best.unique_cnt;
+         z.count = best.total_cnt;
          int m=ArraySize(m_result.zones)+1; ArrayResize(m_result.zones,m); m_result.zones[m-1]=z;
       }
       m_result.zone_count = ArraySize(m_result.zones);
