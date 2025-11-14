@@ -159,7 +159,7 @@ private:
       double span = 0.0;
       for(int i=0;i<g_ctx.prz_count;i++)
       {
-         const PRZ &zone = g_ctx.prz[i];
+         PRZ zone = g_ctx.prz[i];
          if(price >= zone.low - tol && price <= zone.high + tol)
          {
             count = MathMax(1, zone.count);
