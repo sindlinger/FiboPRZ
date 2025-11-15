@@ -3,15 +3,13 @@
 struct ClusterResult
 {
    bool  member_mask[];
-   PRZ   zones[];
-   int   zone_count;
+   int   cluster_count;
    int   visible_candidates;
 
    void Clear()
    {
       ArrayResize(member_mask, 0);
-      ArrayResize(zones, 0);
-      zone_count = 0;
+      cluster_count = 0;
       visible_candidates = 0;
    }
 };
@@ -55,10 +53,9 @@ public:
          return false;
 
       SortPricesWithIndex(all, view_idx, view_count);
-      ComputeClusterMembershipAndZones(all, view_count,
-                                       cfg.cluster_range,
-                                       cfg.min_lines,
-                                       cfg.cluster_range);
+      m_result.cluster_count = ComputeClusterMembership(all, view_count,
+                                                        cfg.cluster_range,
+                                                        cfg.min_lines);
 
       if(cfg.max_visible_lines>0)
       {
@@ -97,7 +94,6 @@ public:
          if(m_result.member_mask[idx]) visible++;
       }
       m_result.visible_candidates = visible;
-      m_result.zone_count = ArraySize(m_result.zones);
       return (visible>0);
    }
 
@@ -127,15 +123,12 @@ private:
       }
    }
 
-   void ComputeClusterMembershipAndZones(const FibItem &all[],
-                                         int view_count,
-                                         double range,
-                                         int min_lines,
-                                         double rect_thickness)
+   int ComputeClusterMembership(const FibItem &all[],
+                                int view_count,
+                                double range,
+                                int min_lines)
    {
-      ArrayResize(m_result.zones, 0);
-      m_result.zone_count = 0;
-      if(view_count<=0 || range<=0.0 || min_lines<=1) return;
+      if(view_count<=0 || range<=0.0 || min_lines<=1) return 0;
 
       const double h = range*0.5;
       double tol = LabelManager::PriceTolerance();
@@ -168,7 +161,7 @@ private:
       ArrayResize(bucketPrice, bucketCount);
       ArrayResize(bucketStart, bucketCount);
       ArrayResize(bucketLen, bucketCount);
-      if(bucketCount==0) return;
+      if(bucketCount==0) return 0;
 
       struct Cand {
          double low, high, center;
@@ -239,8 +232,9 @@ private:
       }
 
       if(ArraySize(cand)==0)
-         return;
+         return 0;
 
+      int clusters=0;
       for(int a=0;a<ArraySize(cand)-1;a++){
          int best=a;
          for(int b=a+1;b<ArraySize(cand);b++) if(cand[b].low < cand[best].low) best=b;
@@ -257,30 +251,13 @@ private:
             else if(cand[i].unique_cnt == best.unique_cnt && cand[i].total_cnt > best.total_cnt) takeNew=true;
             if(takeNew) best=cand[i];
          }else{
-            double span = MathMax(0.0, best.high - best.low);
-            double targetWidth = (rect_thickness>0.0 ? MathMax(rect_thickness, span) : MathMax(range, span));
-            double pad = (targetWidth > span ? 0.5*(targetWidth - span) : 0.0);
-            PRZ z;
-            z.low = best.low - pad;
-            z.high = best.high + pad;
-            z.center = (z.low+z.high)*0.5;
-            z.count = best.total_cnt;
-            int m=ArraySize(m_result.zones)+1; ArrayResize(m_result.zones,m); m_result.zones[m-1]=z;
-
+            clusters++;
             best=cand[i];
          }
       }
       if(open){
-         double span = MathMax(0.0, best.high - best.low);
-         double targetWidth = (rect_thickness>0.0 ? MathMax(rect_thickness, span) : MathMax(range, span));
-         double pad = (targetWidth > span ? 0.5*(targetWidth - span) : 0.0);
-         PRZ z;
-         z.low = best.low - pad;
-         z.high = best.high + pad;
-         z.center = (z.low+z.high)*0.5;
-         z.count = best.total_cnt;
-         int m=ArraySize(m_result.zones)+1; ArrayResize(m_result.zones,m); m_result.zones[m-1]=z;
+         clusters++;
       }
-      m_result.zone_count = ArraySize(m_result.zones);
+      return clusters;
    }
 };

@@ -49,7 +49,7 @@ public:
          if(idx<0 || idx>=total_items) continue;
          const FibItem item = items[idx];
          double priceToDraw = item.price;
-         color col = (item.is_expansion ? InpExpandLineColor : InpRetraceLineColor);
+         color col = ResolvePriceLineColor(item);
          string ln = BuildPriceLineObjectName(item, drawn);
          g_overlay.UpsertPriceSegment(ln, 0, 0, priceToDraw, col, lineWidth);
          ObjectSetString(ChartID(), ln, OBJPROP_TEXT, BuildPriceLineComment(item));
@@ -87,7 +87,7 @@ public:
 
          const FibItem item = items[idx];
          double priceToDraw = item.price;
-         color col = (item.is_expansion ? InpExpandLineColor : InpRetraceLineColor);
+         color col = ResolvePriceLineColor(item);
          string ln = BuildPriceLineObjectName(item, drawn);
          g_overlay.UpsertPriceSegment(ln, 0, 0, priceToDraw, col, lineWidth);
          ObjectSetString(ChartID(), ln, OBJPROP_TEXT, BuildPriceLineComment(item));
@@ -154,22 +154,33 @@ private:
 
    string BuildTradingLabel(const FibItem &item, double price) const
    {
-      double tol = LabelManager::PriceTolerance();
-      int count = 1;
       double span = 0.0;
-      for(int i=0;i<g_ctx.prz_count;i++)
+      int count = CollectLinesNearPrice(price, span);
+      string spanText = (span>0.0 ? FiboUtils::FormatPrice(span) : "-");
+      string legInfo = (InpLabelShowLeg ? StringFormat(" L%d", item.leg_id) : "");
+      return StringFormat("Lines:%d Span:%s%s", MathMax(1, count), spanText, legInfo);
+   }
+
+   int CollectLinesNearPrice(double price, double &span) const
+   {
+      double tol = MathMax(LabelManager::PriceTolerance()*5.0, _Point*2.0);
+      int count=0;
+      double low=DBL_MAX, high=-DBL_MAX;
+      int viewCount = ArraySize(g_ctx.view_price);
+      for(int i=0;i<viewCount;i++)
       {
-         PRZ zone = g_ctx.prz[i];
-         if(price >= zone.low - tol && price <= zone.high + tol)
+         int idx = g_ctx.view_price[i];
+         if(idx<0 || idx>=g_ctx.all_total) continue;
+         const FibItem it = g_ctx.all[idx];
+         if(MathAbs(it.price - price) <= tol)
          {
-            count = MathMax(1, zone.count);
-            span = MathAbs(zone.high - zone.low);
-            break;
+            count++;
+            if(it.price < low) low = it.price;
+            if(it.price > high) high = it.price;
          }
       }
-      string spanText = (span>0.0 ? FiboUtils::FormatPrice(span) : "?");
-      string legInfo = (InpLabelShowLeg ? StringFormat(" L%d", item.leg_id) : "");
-      return StringFormat("Lines:%d Span:%s%s", count, spanText, legInfo);
+      span = (count>0 && low<=high ? MathAbs(high-low) : 0.0);
+      return count;
    }
 
    void ResetFrame()

@@ -11,6 +11,7 @@
 // Prototypes necessários por includes
 void Dbg(const string &s);
 int PriceDigits();
+color ResolvePriceLineColor(const FibItem &item);
 // Utilidades
 #include "inc/FiboUtils.mqh"
 // Demais módulos
@@ -77,8 +78,14 @@ input int      InpATR_D1_Periods         = 100;     // ATR(1D) período (média 
 input double   InpClusterRangePctATR     = 0.5;   // ESPESSURA do cluster = % do ATR(1D)
 input int      InpClusterMinLines        = 2;     // mínimo de linhas para existir cluster (Recomendado)
 
+input group   "K-Means";
+input int      InpKMeansClusterCount     = 3;     // número de centros (k)
+input int      InpKMeansMaxIterations    = 20;    // iterações máximas
+input int      InpKMeansMinLines         = 3;     // mínimo de linhas por cluster válido
+input double   InpKMeansBandPctATR       = 0.5;   // espessura máxima = % ATR(1D) (0 = auto)
+
 input group   "Exibição de Preço";
-input ENUM_PRICE_MODE InpPriceMode       = PRICE_CLUSTER; // padrão = LINHAS em CLUSTER
+input ENUM_PRICE_MODE InpPriceMode       = PRICE_CLUSTER; // modos: Cluster / Raw / K-Means
 input ENUM_LABEL_DISPLAY_MODE InpPriceLabelMode = LABEL_MODE_DEBUG; // modo de exibição dos rótulos
 input int      InpMaxPriceLines          = 300;   // máximo de linhas desenhadas (0 = sem limite)
 input ENUM_PRICE_LINE_TRIM_MODE InpMaxLineTrimMode = PRICE_LINE_TRIM_OLDEST; // critério quando exceder o máximo
@@ -90,6 +97,8 @@ input color    InpExpandLineColor        = clrOrangeRed;   // X
 input bool     InpShowLabels             = true;           // rótulos (ratio) nas linhas
 input bool     InpLabelsMirrorLeft       = true;           // duplicar rótulos no lado esquerdo
 input bool     InpLabelShowLeg           = true;           // incluir id da perna no rótulo
+input bool     InpUseRatioColors         = false;          // usar cores específicas por razão?
+input string   InpRatioColorMap          = "0.236=#66C2A5;0.382=#8DA0CB;0.500=#A6D854;0.618=#FFD92F;1.000=#E78AC3;1.618=#FC8D62"; // ratio[:R|X]=#RRGGBB separados por ';'
 
 input group   "Tempo";
 input bool     InpShowTimeFibs           = false;        // liga/desliga marcas de tempo
@@ -124,6 +133,7 @@ const string    G_PREF_DBG_EXP = "FCZDBG_EXP_";
 const string    G_PREF_DBG_EXP_LBL = "FCZDBG_EXPLBL_";
 const string    G_PREF_DBG_TIME = "FCZDBG_TIME_DOT_";
 const string    G_PREF_DBG_TIME_VL = "FCZDBG_TIME_VL_";
+const double    RATIO_COLOR_TOL = 1e-6;
 
 // ========================= Utils =========================
 void Dbg(const string &s){ if(!InpDebugLog) return; if(g_ctx.dbg_prints>=InpDebugPrintLimit) return; Print(s); g_ctx.dbg_prints++; }
@@ -212,6 +222,387 @@ void SortPositionsByPriceAsc(int &positions[], double &prices[], int count)
          int tmpPos=positions[i]; positions[i]=positions[best]; positions[best]=tmpPos;
       }
    }
+}
+
+// ========================= Cores por Ratio =========================
+bool HexCharToValue(int ch, int &value)
+{
+   if(ch>='0' && ch<='9'){ value = ch - '0'; return true; }
+   if(ch>='A' && ch<='F'){ value = 10 + (ch - 'A'); return true; }
+   if(ch>='a' && ch<='f'){ value = 10 + (ch - 'a'); return true; }
+   return false;
+}
+
+bool TryParseHexColor(const string &hex, color &out)
+{
+   int len = StringLen(hex);
+   if(len!=6 && len!=8) return false;
+
+   int value=0;
+   for(int i=0;i<len;i++)
+   {
+      int digit=0;
+      if(!HexCharToValue(StringGetCharacter(hex,i), digit))
+         return false;
+      value = (value<<4) | digit;
+   }
+   out = (color)value;
+   return true;
+}
+
+bool TryParseDecimalColor(const string &text, color &out)
+{
+   if(StringLen(text)==0) return false;
+   for(int i=0;i<StringLen(text);i++)
+   {
+      int ch = StringGetCharacter(text,i);
+      if(i==0 && (ch=='+' || ch=='-'))
+         continue;
+      if(ch<'0' || ch>'9')
+         return false;
+   }
+   long value = StringToInteger(text);
+   if(value<0) value=0;
+   out = (color)value;
+   return true;
+}
+
+bool TryParseColorToken(const string &token, color &out)
+{
+   string trimmed = FiboUtils::Trim(token);
+   if(StringLen(trimmed)==0)
+      return false;
+   if(StringGetCharacter(trimmed,0)=='#')
+      return TryParseHexColor(StringSubstr(trimmed,1), out);
+   if(StringLen(trimmed)>2 && StringGetCharacter(trimmed,0)=='0' &&
+      (StringGetCharacter(trimmed,1)=='x' || StringGetCharacter(trimmed,1)=='X'))
+      return TryParseHexColor(StringSubstr(trimmed,2), out);
+   return TryParseDecimalColor(trimmed, out);
+}
+
+int EnsureRatioColorRule(double ratio, RatioColorRule &rules[])
+{
+   for(int i=0;i<ArraySize(rules);i++)
+   {
+      if(MathAbs(rules[i].ratio - ratio) <= RATIO_COLOR_TOL)
+         return i;
+   }
+   int idx = ArraySize(rules);
+   ArrayResize(rules, idx+1);
+   rules[idx].ratio = ratio;
+   rules[idx].has_retrace = false;
+   rules[idx].has_expansion = false;
+   return idx;
+}
+
+bool ParseRatioColorEntry(const string &entry, RatioColorRule &rules[])
+{
+   string trimmed = FiboUtils::Trim(entry);
+   if(StringLen(trimmed)==0)
+      return false;
+
+   int eqPos = StringFind(trimmed, "=");
+   if(eqPos<0)
+      return false;
+
+   string left = FiboUtils::Trim(StringSubstr(trimmed, 0, eqPos));
+   string colorTok = FiboUtils::Trim(StringSubstr(trimmed, eqPos+1));
+   if(StringLen(left)==0 || StringLen(colorTok)==0)
+      return false;
+
+   string ratioTok = left;
+   string typeTok = "";
+   int colonPos = StringFind(left, ":");
+   if(colonPos>=0)
+   {
+      ratioTok = FiboUtils::Trim(StringSubstr(left, 0, colonPos));
+      typeTok  = FiboUtils::Trim(StringSubstr(left, colonPos+1));
+   }
+
+   double ratio = StringToDouble(ratioTok);
+   if(ratio<=0.0)
+      return false;
+
+   bool applyRetrace = true;
+   bool applyExpansion = true;
+   if(StringLen(typeTok)>0)
+   {
+      string upper = typeTok;
+      StringToUpper(upper);
+      applyRetrace = (StringFind(upper, "R")>=0);
+      applyExpansion = (StringFind(upper, "X")>=0);
+      if(!applyRetrace && !applyExpansion)
+         return false;
+   }
+
+   color parsedColor;
+   if(!TryParseColorToken(colorTok, parsedColor))
+      return false;
+
+   int idx = EnsureRatioColorRule(ratio, rules);
+   if(applyRetrace)
+   {
+      rules[idx].retrace_color = parsedColor;
+      rules[idx].has_retrace = true;
+   }
+   if(applyExpansion)
+   {
+      rules[idx].expansion_color = parsedColor;
+      rules[idx].has_expansion = true;
+   }
+   if(!applyRetrace && !applyExpansion)
+      return false;
+   return true;
+}
+
+bool ParseRatioColorMap(const string &text, RatioColorRule &rules[])
+{
+   ArrayResize(rules, 0);
+   string entries[];
+   int count = StringSplit(text, ';', entries);
+   if(count<=0)
+      return false;
+   bool any=false;
+   for(int i=0;i<count;i++)
+   {
+      if(ParseRatioColorEntry(entries[i], rules))
+         any=true;
+   }
+   return any;
+}
+
+bool TryGetRatioColor(double ratio, bool isExpansion, color &out)
+{
+   if(!g_ctx.ratio_color_enabled)
+      return false;
+   for(int i=0;i<ArraySize(g_ctx.ratio_color_rules);i++)
+   {
+      const RatioColorRule rule = g_ctx.ratio_color_rules[i];
+      if(MathAbs(rule.ratio - ratio) > RATIO_COLOR_TOL)
+         continue;
+      if(isExpansion && rule.has_expansion)
+      {
+         out = rule.expansion_color;
+         return true;
+      }
+      if(!isExpansion && rule.has_retrace)
+      {
+         out = rule.retrace_color;
+         return true;
+      }
+      if(rule.has_retrace)
+      {
+         out = rule.retrace_color;
+         return true;
+      }
+      if(rule.has_expansion)
+      {
+         out = rule.expansion_color;
+         return true;
+      }
+   }
+   return false;
+}
+
+color ResolvePriceLineColor(const FibItem &item)
+{
+   color custom;
+   if(TryGetRatioColor(item.ratio, item.is_expansion, custom))
+      return custom;
+   return (item.is_expansion ? InpExpandLineColor : InpRetraceLineColor);
+}
+
+void ConfigureRatioColorsFromInput()
+{
+   ArrayResize(g_ctx.ratio_color_rules, 0);
+   g_ctx.ratio_color_enabled = false;
+   if(!InpUseRatioColors)
+      return;
+   bool ok = ParseRatioColorMap(InpRatioColorMap, g_ctx.ratio_color_rules);
+   g_ctx.ratio_color_enabled = ok;
+   if(!ok)
+   {
+      Print("Fibo: mapa de cores por razão inválido (use ratio[:R|X]=#RRGGBB separados por ';').");
+   }
+}
+
+bool BuildKMeansPriceClusters(const FibItem &all[], int all_total,
+                              const int &view_idx[], int view_count,
+                              int clusterCount, int maxIterations, int minLines,
+                              double bandThickness,
+                              ClusterResult &outResult)
+{
+   outResult.Clear();
+   ArrayResize(outResult.member_mask, all_total);
+   for(int i=0;i<all_total;i++)
+      outResult.member_mask[i]=false;
+
+   if(view_count<=0 || all_total<=0)
+      return false;
+
+   double priceList[];
+   int fibIndexList[];
+   ArrayResize(priceList, view_count);
+   ArrayResize(fibIndexList, view_count);
+
+   int dataCount=0;
+   for(int k=0;k<view_count;k++)
+   {
+      int idx=view_idx[k];
+      if(idx<0 || idx>=all_total) continue;
+      if(all[idx].kind!=FIBK_PRICE) continue;
+      double price=all[idx].price;
+      if(!MathIsValidNumber(price)) continue;
+      priceList[dataCount]=price;
+      fibIndexList[dataCount]=idx;
+      dataCount++;
+   }
+
+   if(dataCount<=0)
+      return false;
+
+   clusterCount = MathMax(1, MathMin(clusterCount, dataCount));
+   maxIterations = MathMax(1, maxIterations);
+   minLines = MathMax(1, minLines);
+
+   double centroids[];
+   ArrayResize(centroids, clusterCount);
+   double sorted[];
+   ArrayResize(sorted, dataCount);
+   for(int i=0;i<dataCount;i++) sorted[i]=priceList[i];
+   ArraySort(sorted);
+
+   if(clusterCount==1)
+   {
+      double sum=0.0;
+      for(int i=0;i<dataCount;i++) sum+=priceList[i];
+      centroids[0] = (dataCount>0 ? sum/(double)dataCount : sorted[0]);
+   }
+   else
+   {
+      int denom = MathMax(1, clusterCount-1);
+      for(int c=0;c<clusterCount;c++)
+      {
+         int pos = (int)MathRound((double)c * (double)(dataCount-1) / (double)denom);
+         if(pos<0) pos=0;
+         if(pos>=dataCount) pos=dataCount-1;
+         centroids[c]=sorted[pos];
+      }
+   }
+
+   int assignments[];
+   ArrayResize(assignments, dataCount);
+   for(int i=0;i<dataCount;i++) assignments[i]=-1;
+
+   double accum[];
+   ArrayResize(accum, clusterCount);
+   int counts[];
+   ArrayResize(counts, clusterCount);
+
+   bool changed=true;
+   int iter=0;
+   while(changed && iter<maxIterations)
+   {
+      changed=false;
+      for(int c=0;c<clusterCount;c++){ counts[c]=0; accum[c]=0.0; }
+
+      for(int p=0;p<dataCount;p++)
+      {
+         double price = priceList[p];
+         int bestIdx=0;
+         double bestDist = MathAbs(price - centroids[0]);
+         for(int c=1;c<clusterCount;c++)
+         {
+            double dist = MathAbs(price - centroids[c]);
+            if(dist < bestDist)
+            {
+               bestDist = dist;
+               bestIdx = c;
+            }
+         }
+         if(assignments[p]!=bestIdx)
+         {
+            assignments[p]=bestIdx;
+            changed=true;
+         }
+         counts[bestIdx]++;
+         accum[bestIdx]+=price;
+      }
+
+      for(int c=0;c<clusterCount;c++)
+      {
+         if(counts[c]>0)
+            centroids[c] = accum[c]/(double)counts[c];
+      }
+
+      iter++;
+   }
+
+   double tolBase = MathMax(LabelManager::PriceTolerance(), _Point);
+   double bandHalfOverride = (bandThickness>0.0 ? MathMax(bandThickness*0.5, tolBase) : 0.0);
+
+   int visible=0;
+   outResult.cluster_count = 0;
+   for(int c=0;c<clusterCount;c++)
+   {
+      int memberFib[];
+      double memberDist[];
+      ArrayResize(memberFib, 0);
+      ArrayResize(memberDist, 0);
+      for(int p=0;p<dataCount;p++)
+      {
+         if(assignments[p]!=c) continue;
+         int fibIdx = fibIndexList[p];
+         if(fibIdx<0 || fibIdx>=all_total) continue;
+         double dist = MathAbs(priceList[p] - centroids[c]);
+         int m = ArraySize(memberFib);
+         ArrayResize(memberFib, m+1);
+         ArrayResize(memberDist, m+1);
+         memberFib[m]=fibIdx;
+         memberDist[m]=dist;
+      }
+      int memberCount = ArraySize(memberFib);
+      if(memberCount < minLines)
+         continue;
+
+      for(int a=0;a<memberCount-1;a++)
+      {
+         int best=a;
+         for(int b=a+1;b<memberCount;b++)
+            if(memberDist[b] < memberDist[best]) best=b;
+         if(best!=a)
+         {
+            double td = memberDist[a]; memberDist[a]=memberDist[best]; memberDist[best]=td;
+            int tf = memberFib[a]; memberFib[a]=memberFib[best]; memberFib[best]=tf;
+         }
+      }
+
+      int limitIdx = MathMin(minLines-1, memberCount-1);
+      double limitDist = memberDist[limitIdx];
+      double cutoff = limitDist + tolBase;
+      if(bandHalfOverride>0.0)
+         cutoff = MathMin(cutoff, bandHalfOverride);
+      if(cutoff<=0.0)
+         cutoff = tolBase;
+
+      outResult.cluster_count++;
+
+      for(int i=0;i<memberCount;i++)
+      {
+         if(memberDist[i] > cutoff)
+            continue;
+         int fibIdx = memberFib[i];
+         if(fibIdx<0 || fibIdx>=all_total) continue;
+         if(!outResult.member_mask[fibIdx])
+         {
+            outResult.member_mask[fibIdx]=true;
+            visible++;
+         }
+      }
+   }
+
+   outResult.visible_candidates = visible;
+   return (visible>0);
 }
 
 bool MarkNextRemoval(const int &positions[], int count, int &cursor, bool &flags[])
@@ -653,6 +1044,7 @@ int OnInit()
    IndicatorSetString(INDICATOR_SHORTNAME, "FiboPRZ 3.25");
    if(!FiboUtils::ParseRatiosTo(InpFibRatios, g_ctx.fib_ratios)){ Print("Fibo: não foi possível interpretar as razões de PREÇO."); return INIT_FAILED; }
    FiboUtils::ParseRatiosTo(InpTimeFibRatios, g_ctx.time_ratios);
+   ConfigureRatioColorsFromInput();
    g_overlay.ClearByPrefix("FCZ");
 
    // cria handle do ZigZag (única fonte de pivôs)
@@ -777,8 +1169,51 @@ int OnCalculate(const int rates_total,
    {
       g_ctx.visible_cluster_lines = g_renderer.RenderPriceRaw(g_ctx.all, g_ctx.all_total,
                                                               g_ctx.view_price, g_label_manager);
-      g_ctx.prz_count = 0;
-      ArrayResize(g_ctx.prz, 0);
+      g_ctx.cluster_group_count = 0;
+   }
+   else if(InpPriceMode==PRICE_KMEANS)
+   {
+      double kmBandRange = 0.0;
+      if(InpKMeansBandPctATR>0.0)
+      {
+         double kmAtr=0.0; bool kmAtrOk = GetATR_D1(InpATR_D1_Periods, kmAtr);
+         if(!kmAtrOk || kmAtr<=0.0){
+            double sumR=0.0; int N=MathMin(200,rates_total);
+            for(int i=0;i<N;i++) sumR += (high[i]-low[i]);
+            kmAtr = (N>0? sumR/N : 0.0);
+         }
+         kmBandRange = kmAtr * (InpKMeansBandPctATR/100.0);
+      }
+
+      ClusterResult kmRes;
+      bool okKM = BuildKMeansPriceClusters(g_ctx.all, g_ctx.all_total,
+                                           g_ctx.view_price, ArraySize(g_ctx.view_price),
+                                           InpKMeansClusterCount,
+                                           InpKMeansMaxIterations,
+                                           InpKMeansMinLines,
+                                           kmBandRange,
+                                           kmRes);
+      if(okKM)
+      {
+         g_ctx.cluster_group_count = kmRes.cluster_count;
+         g_ctx.visible_cluster_lines = g_renderer.RenderPriceClusters(g_ctx.all, g_ctx.all_total,
+                                                                      g_ctx.view_price,
+                                                                      kmRes,
+                                                                      g_label_manager);
+         if(InpDebugLog){
+            Dbg(StringFormat("[Fibo][%s] KMeans k=%d iter=%d minLines=%d  Band=%s%% ATR  Clusters=%d  Lines=%d  Total=%d",
+                  _Symbol,
+                  InpKMeansClusterCount, InpKMeansMaxIterations, InpKMeansMinLines,
+                  FiboUtils::FormatPercentValue(InpKMeansBandPctATR),
+                  g_ctx.cluster_group_count, g_ctx.visible_cluster_lines, ArraySize(g_ctx.view_price)));
+         }
+      }
+      else
+      {
+         g_ctx.cluster_group_count = 0;
+         g_ctx.visible_cluster_lines = 0;
+         g_overlay.ClearTrackedPriceLines();
+      }
    }
    else // PRICE_CLUSTER
    {
@@ -803,9 +1238,7 @@ int OnCalculate(const int rates_total,
                                 clusterCfg);
       ClusterResult clusterRes = g_cluster_manager.Result();
 
-      g_ctx.prz_count = clusterRes.zone_count;
-      ArrayResize(g_ctx.prz, clusterRes.zone_count);
-      ArrayCopy(g_ctx.prz, clusterRes.zones);
+      g_ctx.cluster_group_count = clusterRes.cluster_count;
 
       g_ctx.visible_cluster_lines = g_renderer.RenderPriceClusters(g_ctx.all, g_ctx.all_total,
                                                                    g_ctx.view_price,
@@ -813,11 +1246,11 @@ int OnCalculate(const int rates_total,
                                                                    g_label_manager);
 
       if(InpDebugLog){
-         Dbg(StringFormat("[Fibo][%s] Src=ZZ  ATR(1D,p=%d)=%s  Range=%s%%  MinLines=%d  PRZ=%d  ClusterLines=%d  LinesTot=%d",
+         Dbg(StringFormat("[Fibo][%s] Src=ZZ  ATR(1D,p=%d)=%s  Range=%s%%  MinLines=%d  Clusters=%d  ClusterLines=%d  LinesTot=%d",
                _Symbol,
                InpATR_D1_Periods, FiboUtils::FormatPrice(atrD1), FiboUtils::FormatPercentValue(InpClusterRangePctATR),
                InpClusterMinLines,
-               g_ctx.prz_count, g_ctx.visible_cluster_lines, ArraySize(g_ctx.view_price)));
+               g_ctx.cluster_group_count, g_ctx.visible_cluster_lines, ArraySize(g_ctx.view_price)));
       }
    }
    g_label_manager.EndFrame();
@@ -839,13 +1272,48 @@ int OnCalculate(const int rates_total,
    // 6) RESUMO (visor)
    if(InpShowSummary)
    {
-      string ln1 = StringFormat(
-         "PRICE  Linhas:%d  EmCluster:%d  PRZs:%d  Range=%s%% ATR(1D,p=%d)",
-         ArraySize(g_ctx.view_price), g_ctx.visible_cluster_lines, g_ctx.prz_count,
-         FiboUtils::FormatPercentValue(InpClusterRangePctATR), InpATR_D1_Periods
-      );
-      string ln2 = StringFormat("PRICE  R:%d  X:%d  MinLinhas:%d  Pernas:%d  Topos:%d  Fundos:%d",
-                                g_ctx.retrace_total, g_ctx.expansion_total, InpClusterMinLines, g_ctx.leg_total, g_ctx.pivot_tops, g_ctx.pivot_bottoms);
+      string ln1;
+      if(InpPriceMode==PRICE_CLUSTER)
+      {
+         ln1 = StringFormat(
+            "PRICE  Linhas:%d  EmCluster:%d  Clusters:%d  Range=%s%% ATR(1D,p=%d)",
+            ArraySize(g_ctx.view_price), g_ctx.visible_cluster_lines, g_ctx.cluster_group_count,
+            FiboUtils::FormatPercentValue(InpClusterRangePctATR), InpATR_D1_Periods
+         );
+      }
+      else if(InpPriceMode==PRICE_KMEANS)
+      {
+         ln1 = StringFormat(
+            "PRICE  Linhas:%d  EmKMeans:%d  Clusters:%d  K=%d  Iter=%d  Band=%s%% ATR",
+            ArraySize(g_ctx.view_price), g_ctx.visible_cluster_lines, g_ctx.cluster_group_count,
+            InpKMeansClusterCount, InpKMeansMaxIterations,
+            FiboUtils::FormatPercentValue(InpKMeansBandPctATR)
+         );
+      }
+      else
+      {
+         ln1 = StringFormat("PRICE  Linhas:%d  Modo RAW (clusters desligados)", ArraySize(g_ctx.view_price));
+      }
+
+      string ln2;
+      if(InpPriceMode==PRICE_CLUSTER)
+      {
+         ln2 = StringFormat("PRICE  R:%d  X:%d  MinLinhas:%d  Pernas:%d  Topos:%d  Fundos:%d",
+                            g_ctx.retrace_total, g_ctx.expansion_total, InpClusterMinLines,
+                            g_ctx.leg_total, g_ctx.pivot_tops, g_ctx.pivot_bottoms);
+      }
+      else if(InpPriceMode==PRICE_KMEANS)
+      {
+         ln2 = StringFormat("PRICE  R:%d  X:%d  MinK:%d  Pernas:%d  Topos:%d  Fundos:%d",
+                            g_ctx.retrace_total, g_ctx.expansion_total, InpKMeansMinLines,
+                            g_ctx.leg_total, g_ctx.pivot_tops, g_ctx.pivot_bottoms);
+      }
+      else
+      {
+         ln2 = StringFormat("PRICE  R:%d  X:%d  Pernas:%d  Topos:%d  Fundos:%d",
+                            g_ctx.retrace_total, g_ctx.expansion_total,
+                            g_ctx.leg_total, g_ctx.pivot_tops, g_ctx.pivot_bottoms);
+      }
       string ln3 = StringFormat(
          "TIME   Marcas:%d  VLines:%s  (ambas direções=%s  base=%s)   Pivôs=ZigZag",
          ArraySize(g_ctx.view_time), (InpShowTimeVLines? "sim":"não"),

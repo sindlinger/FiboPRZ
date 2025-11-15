@@ -1,7 +1,7 @@
 // Core types and enums used across modules
 
 // Enums used by inputs and modules
-enum ENUM_PRICE_MODE { PRICE_CLUSTER=0, PRICE_RAW=1 };
+enum ENUM_PRICE_MODE { PRICE_CLUSTER=0, PRICE_RAW=1, PRICE_KMEANS=2 };
 enum ENUM_LABEL_DISPLAY_MODE { LABEL_MODE_NORMAL=0, LABEL_MODE_DEBUG=1, LABEL_MODE_TRADING=2 };
 enum ENUM_PRICE_LINE_TRIM_MODE { PRICE_LINE_TRIM_OLDEST=0, PRICE_LINE_TRIM_FARTHEST=1 };
 enum ENUM_FIB_KIND { FIBK_PRICE=0, FIBK_TIME=1 };
@@ -33,8 +33,24 @@ struct FibItem {
    datetime t; bool forward;
 };
 
-// Potential Reversal Zone (cluster output)
-struct PRZ { double low; double high; int count; double center; };
+struct RatioColorRule
+{
+   double ratio;
+   color  retrace_color;
+   color  expansion_color;
+   bool   has_retrace;
+   bool   has_expansion;
+
+   RatioColorRule()
+   {
+      ratio = 0.0;
+      retrace_color = clrNONE;
+      expansion_color = clrNONE;
+      has_retrace = false;
+      has_expansion = false;
+   }
+};
+
 struct ClusterLegPick { int leg_id; int fib_idx; double dist_center; };
 
 // Visualization options for legs
@@ -90,12 +106,10 @@ struct FiboContext
    int view_price[];
    int view_time[];
 
-   PRZ prz[];
-   int prz_count;
-
    int retrace_total;
    int expansion_total;
    int visible_cluster_lines;
+   int cluster_group_count;
    int pivot_total;
    int pivot_tops;
    int pivot_bottoms;
@@ -106,6 +120,8 @@ struct FiboContext
 
    string label_slot_identity[];
    bool   label_slot_used[];
+   RatioColorRule ratio_color_rules[];
+   bool   ratio_color_enabled;
 
    void Reset()
    {
@@ -138,12 +154,10 @@ struct FiboContext
       ArrayResize(view_price, 0);
       ArrayResize(view_time, 0);
 
-      ArrayResize(prz, 0);
-      prz_count = 0;
-
       retrace_total = 0;
       expansion_total = 0;
       visible_cluster_lines = 0;
+      cluster_group_count = 0;
       pivot_total = 0;
       pivot_tops = 0;
       pivot_bottoms = 0;
@@ -154,5 +168,7 @@ struct FiboContext
 
       ArrayResize(label_slot_identity, 0);
       ArrayResize(label_slot_used, 0);
+      ArrayResize(ratio_color_rules, 0);
+      ratio_color_enabled = false;
    }
 };
