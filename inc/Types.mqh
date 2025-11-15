@@ -110,6 +110,7 @@ struct FiboContext
    int expansion_total;
    int visible_cluster_lines;
    int cluster_group_count;
+   int prev_kmeans_label_count;
    int pivot_total;
    int pivot_tops;
    int pivot_bottoms;
@@ -158,6 +159,7 @@ struct FiboContext
       expansion_total = 0;
       visible_cluster_lines = 0;
       cluster_group_count = 0;
+      prev_kmeans_label_count = 0;
       pivot_total = 0;
       pivot_tops = 0;
       pivot_bottoms = 0;

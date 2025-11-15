@@ -83,6 +83,7 @@ input int      InpKMeansClusterCount     = 3;     // número de centros (k)
 input int      InpKMeansMaxIterations    = 20;    // iterações máximas
 input int      InpKMeansMinLines         = 3;     // mínimo de linhas por cluster válido
 input double   InpKMeansBandPctATR       = 0.5;   // espessura máxima = % ATR(1D) (0 = auto)
+input double   InpKMeansFibSnapTolerance = 0.02;  // tolerância p/ encaixar razões (0 = desligado)
 
 input group   "Exibição de Preço";
 input ENUM_PRICE_MODE InpPriceMode       = PRICE_CLUSTER; // modos: Cluster / Raw / K-Means
@@ -133,6 +134,7 @@ const string    G_PREF_DBG_EXP = "FCZDBG_EXP_";
 const string    G_PREF_DBG_EXP_LBL = "FCZDBG_EXPLBL_";
 const string    G_PREF_DBG_TIME = "FCZDBG_TIME_DOT_";
 const string    G_PREF_DBG_TIME_VL = "FCZDBG_TIME_VL_";
+const string    G_PREF_KM_LABEL = "FCZKMLBL_";
 const double    RATIO_COLOR_TOL = 1e-6;
 
 // ========================= Utils =========================
@@ -426,16 +428,62 @@ void ConfigureRatioColorsFromInput()
    }
 }
 
+void ClearKMeansLabels()
+{
+   for(int i=0;i<g_ctx.prev_kmeans_label_count;i++)
+      ObjectDelete(ChartID(), G_PREF_KM_LABEL + IntegerToString(i));
+   g_ctx.prev_kmeans_label_count = 0;
+}
+
+void RenderKMeansClusterLabels(const double &centers[], const int &counts[],
+                               const double &ratios[], int clusterCount,
+                               datetime labelRight)
+{
+   if(clusterCount<=0){
+      ClearKMeansLabels();
+      return;
+   }
+   int order[];
+   ArrayResize(order, clusterCount);
+   for(int i=0;i<clusterCount;i++) order[i]=i;
+   for(int a=0;a<clusterCount-1;a++){
+      int best=a;
+      for(int b=a+1;b<clusterCount;b++)
+         if(counts[order[b]] > counts[order[best]]) best=b;
+      if(best!=a){
+         int tmp=order[a]; order[a]=order[best]; order[best]=tmp;
+      }
+   }
+   int maxLabels = MathMin(clusterCount, MathMax(1, MathMin(5, InpKMeansClusterCount)));
+   if(labelRight==0) labelRight = TimeCurrent();
+   for(int idx=0; idx<maxLabels; idx++)
+   {
+      int clusterIdx = order[idx];
+      string ratioText = (ratios[clusterIdx]>0.0 ? FiboUtils::FormatRatioUnit(ratios[clusterIdx]) : "-");
+      string text = StringFormat("#%d Lin:%d Ratio:%s", idx+1, counts[clusterIdx], ratioText);
+      string name = G_PREF_KM_LABEL + IntegerToString(idx);
+      g_overlay.UpsertText(name, labelRight, centers[clusterIdx], text, clrYellow, 8, ANCHOR_LEFT);
+   }
+   for(int i=maxLabels;i<g_ctx.prev_kmeans_label_count;i++)
+      ObjectDelete(ChartID(), G_PREF_KM_LABEL + IntegerToString(i));
+   g_ctx.prev_kmeans_label_count = maxLabels;
+}
+
 bool BuildKMeansPriceClusters(const FibItem &all[], int all_total,
                               const int &view_idx[], int view_count,
                               int clusterCount, int maxIterations, int minLines,
                               double bandThickness,
-                              ClusterResult &outResult)
+                              const double &fibLevels[], int fibCount, double fibTolerance,
+                              ClusterResult &outResult,
+                              double &clusterCentersOut[], int &clusterCountsOut[], double &clusterRatiosOut[])
 {
    outResult.Clear();
    ArrayResize(outResult.member_mask, all_total);
    for(int i=0;i<all_total;i++)
       outResult.member_mask[i]=false;
+   ArrayResize(clusterCentersOut, 0);
+   ArrayResize(clusterCountsOut, 0);
+   ArrayResize(clusterRatiosOut, 0);
 
    if(view_count<=0 || all_total<=0)
       return false;
@@ -543,8 +591,10 @@ bool BuildKMeansPriceClusters(const FibItem &all[], int all_total,
 
    int visible=0;
    outResult.cluster_count = 0;
+
    for(int c=0;c<clusterCount;c++)
    {
+      // build member list
       int memberFib[];
       double memberDist[];
       ArrayResize(memberFib, 0);
@@ -585,7 +635,52 @@ bool BuildKMeansPriceClusters(const FibItem &all[], int all_total,
       if(cutoff<=0.0)
          cutoff = tolBase;
 
+      double avgRatio = -1.0;
+      if(memberCount>0)
+      {
+         double ratioSum=0.0;
+         int ratioCount=0;
+         for(int p=0;p<dataCount;p++)
+         {
+            if(assignments[p]!=c) continue;
+            int fibIdx = fibIndexList[p];
+            if(fibIdx<0 || fibIdx>=all_total) continue;
+            if(all[fibIdx].ratio>0.0){
+               ratioSum += all[fibIdx].ratio;
+               ratioCount++;
+            }
+         }
+         if(ratioCount>0)
+            avgRatio = ratioSum/(double)ratioCount;
+      }
+
+      double snappedRatio = avgRatio;
+      if(avgRatio>0.0 && fibCount>0 && fibTolerance>0.0)
+      {
+         double bestDiff = DBL_MAX;
+         double bestRatio = avgRatio;
+         for(int f=0;f<fibCount;f++)
+         {
+            double target = fibLevels[f];
+            double diff = MathAbs(target - avgRatio);
+            if(diff < bestDiff)
+            {
+               bestDiff = diff;
+               bestRatio = target;
+            }
+         }
+         if(bestDiff <= fibTolerance)
+            snappedRatio = bestRatio;
+      }
+
       outResult.cluster_count++;
+      int infoIdx = ArraySize(clusterCentersOut);
+      ArrayResize(clusterCentersOut, infoIdx+1);
+      ArrayResize(clusterCountsOut, infoIdx+1);
+      ArrayResize(clusterRatiosOut, infoIdx+1);
+      clusterCentersOut[infoIdx] = centroids[c];
+      clusterCountsOut[infoIdx] = memberCount;
+      clusterRatiosOut[infoIdx] = snappedRatio;
 
       for(int i=0;i<memberCount;i++)
       {
@@ -1165,6 +1260,10 @@ int OnCalculate(const int rates_total,
    // 4) PREÇO — modo
    g_renderer.PrepareFrame(time, rates_total, series);
    g_label_manager.BeginFrame();
+   bool usingKMeans = (InpPriceMode==PRICE_KMEANS);
+   if(!usingKMeans)
+      ClearKMeansLabels();
+
    if(InpPriceMode==PRICE_RAW)
    {
       g_ctx.visible_cluster_lines = g_renderer.RenderPriceRaw(g_ctx.all, g_ctx.all_total,
@@ -1186,13 +1285,19 @@ int OnCalculate(const int rates_total,
       }
 
       ClusterResult kmRes;
+      double kmCenters[];
+      int kmCounts[];
+      double kmRatios[];
       bool okKM = BuildKMeansPriceClusters(g_ctx.all, g_ctx.all_total,
                                            g_ctx.view_price, ArraySize(g_ctx.view_price),
                                            InpKMeansClusterCount,
                                            InpKMeansMaxIterations,
                                            InpKMeansMinLines,
                                            kmBandRange,
-                                           kmRes);
+                                           g_ctx.fib_ratios, ArraySize(g_ctx.fib_ratios),
+                                           InpKMeansFibSnapTolerance,
+                                           kmRes,
+                                           kmCenters, kmCounts, kmRatios);
       if(okKM)
       {
          g_ctx.cluster_group_count = kmRes.cluster_count;
@@ -1207,12 +1312,15 @@ int OnCalculate(const int rates_total,
                   FiboUtils::FormatPercentValue(InpKMeansBandPctATR),
                   g_ctx.cluster_group_count, g_ctx.visible_cluster_lines, ArraySize(g_ctx.view_price)));
          }
+         RenderKMeansClusterLabels(kmCenters, kmCounts, kmRatios, ArraySize(kmCenters),
+                                   g_renderer.CurrentLabelRight());
       }
       else
       {
          g_ctx.cluster_group_count = 0;
          g_ctx.visible_cluster_lines = 0;
          g_overlay.ClearTrackedPriceLines();
+         ClearKMeansLabels();
       }
    }
    else // PRICE_CLUSTER

@@ -200,6 +200,9 @@ private:
       return (m_has_label_bounds ? m_label_right : TimeCurrent());
    }
 
+public:
+   datetime CurrentLabelRight() const { return LabelRight(); }
+
    datetime DebugLabelTime(const datetime &time[], int rates_total) const
    {
       if(m_has_label_bounds)
