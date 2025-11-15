@@ -124,6 +124,8 @@ public:
       g_ctx.prev_tfvl_count = drawn_vl;
    }
 
+   datetime CurrentLabelRight() const { return LabelRight(); }
+
    void RenderDebugOverlays(const LineItem &price_all[], int price_total,
                             const TimeItem &time_all[], int time_total,
                             const datetime &time[], int rates_total)
@@ -199,9 +201,6 @@ private:
    {
       return (m_has_label_bounds ? m_label_right : TimeCurrent());
    }
-
-public:
-   datetime CurrentLabelRight() const { return LabelRight(); }
 
    datetime DebugLabelTime(const datetime &time[], int rates_total) const
    {

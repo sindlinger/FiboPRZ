@@ -1,7 +1,7 @@
 // Core types and enums used across modules
 
 // Enums used by inputs and modules
-enum ENUM_PRICE_MODE { PRICE_CLUSTER=0, PRICE_RAW=1, PRICE_KMEANS=2 };
+enum ENUM_PRICE_MODE { PRICE_CLUSTER=0, PRICE_RAW=1, PRICE_KMEANS=2, PRICE_FFT=3 };
 enum ENUM_LABEL_DISPLAY_MODE { LABEL_MODE_NORMAL=0, LABEL_MODE_DEBUG=1, LABEL_MODE_TRADING=2 };
 enum ENUM_PRICE_LINE_TRIM_MODE { PRICE_LINE_TRIM_OLDEST=0, PRICE_LINE_TRIM_FARTHEST=1 };
 enum ENUM_FIB_KIND { FIBK_PRICE=0, FIBK_TIME=1 };
@@ -111,6 +111,7 @@ struct FiboContext
    int visible_cluster_lines;
    int cluster_group_count;
    int prev_kmeans_label_count;
+   int prev_fft_label_count;
    int pivot_total;
    int pivot_tops;
    int pivot_bottoms;
@@ -160,6 +161,7 @@ struct FiboContext
       visible_cluster_lines = 0;
       cluster_group_count = 0;
       prev_kmeans_label_count = 0;
+      prev_fft_label_count = 0;
       pivot_total = 0;
       pivot_tops = 0;
       pivot_bottoms = 0;

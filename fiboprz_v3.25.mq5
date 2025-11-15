@@ -12,6 +12,13 @@
 void Dbg(const string &s);
 int PriceDigits();
 color ResolvePriceLineColor(const FibItem &item);
+void ClearKMeansLabels();
+void RenderKMeansClusterLabels(const double &centers[], const int &counts[],
+                               const double &ratios[], int clusterCount,
+                               datetime labelRight);
+void ClearFFTLabels();
+void RenderFFTLabels(const double &prices[], const double &scores[],
+                     const double &ratios[], int count, datetime labelRight);
 // Utilidades
 #include "inc/FiboUtils.mqh"
 // Demais módulos
@@ -85,6 +92,15 @@ input int      InpKMeansMinLines         = 3;     // mínimo de linhas por clust
 input double   InpKMeansBandPctATR       = 0.5;   // espessura máxima = % ATR(1D) (0 = auto)
 input double   InpKMeansFibSnapTolerance = 0.02;  // tolerância p/ encaixar razões (0 = desligado)
 
+input group   "FFT";
+input int      InpFFTWindowLegs          = 40;    // pernas mais recentes consideradas
+input int      InpFFTResolution          = 128;   // bins (potência de 2 recomendada)
+input int      InpFFTTopHarmonics        = 5;     // harmônicos selecionados
+input int      InpFFTLevelsToShow        = 5;     // quantos níveis exibir
+input double   InpFFTMinAmplitude        = 1.0;   // amplitude mínima do harmônico
+input double   InpFFTFibSnapTolerance    = 0.0;   // tolerância para encaixar ratios
+input color    InpFFTLineColor           = clrGold; // cor das linhas FFT
+
 input group   "Exibição de Preço";
 input ENUM_PRICE_MODE InpPriceMode       = PRICE_CLUSTER; // modos: Cluster / Raw / K-Means
 input ENUM_LABEL_DISPLAY_MODE InpPriceLabelMode = LABEL_MODE_DEBUG; // modo de exibição dos rótulos
@@ -135,6 +151,8 @@ const string    G_PREF_DBG_EXP_LBL = "FCZDBG_EXPLBL_";
 const string    G_PREF_DBG_TIME = "FCZDBG_TIME_DOT_";
 const string    G_PREF_DBG_TIME_VL = "FCZDBG_TIME_VL_";
 const string    G_PREF_KM_LABEL = "FCZKMLBL_";
+const string    G_PREF_FFT_LINE = "FCZFFTLINE_";
+const string    G_PREF_FFT_LABEL = "FCZFFTLBL_";
 const double    RATIO_COLOR_TOL = 1e-6;
 
 // ========================= Utils =========================
@@ -467,6 +485,283 @@ void RenderKMeansClusterLabels(const double &centers[], const int &counts[],
    for(int i=maxLabels;i<g_ctx.prev_kmeans_label_count;i++)
       ObjectDelete(ChartID(), G_PREF_KM_LABEL + IntegerToString(i));
    g_ctx.prev_kmeans_label_count = maxLabels;
+}
+
+void ClearFFTLabels()
+{
+   for(int i=0;i<g_ctx.prev_fft_label_count;i++)
+      ObjectDelete(ChartID(), G_PREF_FFT_LABEL + IntegerToString(i));
+   g_ctx.prev_fft_label_count = 0;
+}
+
+void RenderFFTLabels(const double &prices[], const double &scores[],
+                     const double &ratios[], const double &counts[],
+                     int count, datetime labelRight)
+{
+   if(count<=0){
+      ClearFFTLabels();
+      return;
+   }
+   if(labelRight==0) labelRight = TimeCurrent();
+   int maxLabels = MathMin(count, 8);
+   int order[];
+   ArrayResize(order, count);
+   for(int i=0;i<count;i++) order[i]=i;
+   for(int a=0;a<count-1;a++){
+      int best=a;
+      for(int b=a+1;b<count;b++)
+         if(scores[order[b]] > scores[order[best]]) best=b;
+      if(best!=a){
+         int tmp=order[a]; order[a]=order[best]; order[best]=tmp;
+      }
+   }
+   for(int idx=0; idx<maxLabels; idx++)
+   {
+       int src = order[idx];
+       string ratioText = (ratios[src]>0.0 ? FiboUtils::FormatRatioUnit(ratios[src]) : "-");
+       double rawCount = (ArraySize(counts)>src ? counts[src] : scores[src]);
+       string countText = IntegerToString((int)MathRound(rawCount));
+       if(rawCount<=0.0)
+          countText = "-";
+       string text = StringFormat("FFT#%d Lin:%s Amp:%s Ratio:%s",
+                                  idx+1,
+                                  countText,
+                                  FiboUtils::FormatGenericValue(scores[src], 2),
+                                  ratioText);
+       string name = G_PREF_FFT_LABEL + IntegerToString(idx);
+       g_overlay.UpsertText(name, labelRight, prices[src], text, InpFFTLineColor, 8, ANCHOR_LEFT);
+   }
+   for(int i=maxLabels;i<g_ctx.prev_fft_label_count;i++)
+      ObjectDelete(ChartID(), G_PREF_FFT_LABEL + IntegerToString(i));
+   g_ctx.prev_fft_label_count = maxLabels;
+}
+
+double ComputeRatioFromLeg(const LegSeg &leg, double price)
+{
+   double span = MathAbs(leg.p2 - leg.p1);
+   if(span <= _Point)
+      return -1.0;
+   if(leg.is_up)
+      return (leg.p2 - price)/span;
+   return (price - leg.p2)/span;
+}
+
+double SnapRatioToFib(double ratio, double tolerance)
+{
+   if(ratio<0.0 || tolerance<=0.0 || ArraySize(g_ctx.fib_ratios)<=0)
+      return ratio;
+   double best = ratio;
+   double bestDiff = tolerance;
+   for(int i=0;i<ArraySize(g_ctx.fib_ratios);i++)
+   {
+      double target = g_ctx.fib_ratios[i];
+      double diff = MathAbs(target - ratio);
+      if(diff < bestDiff)
+      {
+         bestDiff = diff;
+         best = target;
+      }
+   }
+   return best;
+}
+
+int NextPow2(int value)
+{
+   int v = 1;
+   while(v<value && v<32768)
+      v <<= 1;
+   return v;
+}
+
+void ComputeDFTReal(const double &series[], int N, double &outRe[], double &outIm[])
+{
+   ArrayResize(outRe, N);
+   ArrayResize(outIm, N);
+   for(int k=0;k<N;k++)
+   {
+      double sumRe=0.0;
+      double sumIm=0.0;
+      for(int n=0;n<N;n++)
+      {
+         double angle = 2.0*M_PI*k*(double)n/(double)N;
+         double sample = series[n];
+         sumRe += sample * MathCos(angle);
+         sumIm -= sample * MathSin(angle);
+      }
+      outRe[k]=sumRe;
+      outIm[k]=sumIm;
+   }
+}
+
+bool BuildFFTPriceLevels(const FibItem &items[], int total_items,
+                         const int &view_idx[], int view_count,
+                         const LegSeg &legs[], int leg_count,
+                         int windowLegs, int resolution,
+                         int topHarmonics, int levelsToShow, double minAmplitude,
+                         double fibSnapTol,
+                         double &outPrices[], double &outScores[], double &outRatios[],
+                         double &outLineCounts[])
+{
+   ArrayResize(outPrices,0);
+   ArrayResize(outScores,0);
+   ArrayResize(outRatios,0);
+   ArrayResize(outLineCounts,0);
+   if(view_count<=0 || resolution<=0 || topHarmonics<=0 || levelsToShow<=0)
+      return false;
+
+   int maxLeg=-1;
+   for(int i=0;i<view_count;i++)
+   {
+      int idx=view_idx[i];
+      if(idx<0 || idx>=total_items) continue;
+      if(items[idx].kind!=FIBK_PRICE) continue;
+      if(items[idx].leg_id > maxLeg)
+         maxLeg = items[idx].leg_id;
+   }
+   if(maxLeg<0)
+      return false;
+   int legWindow = MathMax(1, windowLegs);
+   int legThreshold = MathMax(0, maxLeg - legWindow + 1);
+
+   double priceList[];
+   ArrayResize(priceList,0);
+   double minPrice=DBL_MAX, maxPrice=-DBL_MAX;
+   for(int i=0;i<view_count;i++)
+   {
+      int idx=view_idx[i];
+      if(idx<0 || idx>=total_items) continue;
+      const FibItem item = items[idx];
+      if(item.kind!=FIBK_PRICE) continue;
+      if(item.leg_id < legThreshold) continue;
+      double p = item.price;
+      if(!MathIsValidNumber(p)) continue;
+      int s = ArraySize(priceList);
+      ArrayResize(priceList, s+1);
+      priceList[s]=p;
+      if(p<minPrice) minPrice=p;
+      if(p>maxPrice) maxPrice=p;
+   }
+   int totalLines = ArraySize(priceList);
+   if(totalLines<=0)
+      return false;
+   double range = maxPrice - minPrice;
+   if(range <= _Point)
+      return false;
+
+   int res = NextPow2(MathMax(16, resolution));
+   double series[];
+   ArrayResize(series, res);
+   for(int i=0;i<res;i++) series[i]=0.0;
+   for(int i=0;i<totalLines;i++)
+   {
+      double norm = (priceList[i] - minPrice)/range;
+      norm = MathMax(0.0, MathMin(1.0, norm));
+      int idx = (int)MathRound(norm * (res-1));
+      if(idx<0) idx=0;
+      if(idx>=res) idx=res-1;
+      series[idx] += 1.0;
+   }
+
+   double specRe[], specIm[];
+   ComputeDFTReal(series, res, specRe, specIm);
+
+   int nyquist = res/2;
+   struct Harmonic { int idx; double amp; };
+   Harmonic h[];
+   ArrayResize(h,0);
+   for(int k=1;k<nyquist;k++)
+   {
+      double amp = MathSqrt(specRe[k]*specRe[k] + specIm[k]*specIm[k]);
+      if(amp < minAmplitude)
+         continue;
+      int pos = ArraySize(h);
+      ArrayResize(h, pos+1);
+      h[pos].idx = k;
+      h[pos].amp = amp;
+   }
+   if(ArraySize(h)==0)
+      return false;
+   for(int a=0;a<ArraySize(h)-1;a++){
+      int best=a;
+      for(int b=a+1;b<ArraySize(h);b++) if(h[b].amp > h[best].amp) best=b;
+      if(best!=a){ Harmonic t=h[a]; h[a]=h[best]; h[best]=t; }
+   }
+   int selected = MathMin(topHarmonics, ArraySize(h));
+   if(selected<=0)
+      return false;
+   int selectedIdx[];
+   ArrayResize(selectedIdx, selected);
+   for(int i=0;i<selected;i++) selectedIdx[i]=h[i].idx;
+
+   double recon[];
+   ArrayResize(recon, res);
+   for(int n=0;n<res;n++)
+   {
+      double val = specRe[0]/res;
+      for(int i=0;i<selected;i++)
+      {
+         int k = selectedIdx[i];
+         double angle = 2.0*M_PI*k*(double)n/(double)res;
+         double contrib = (specRe[k]*MathCos(angle) - specIm[k]*MathSin(angle));
+         val += (2.0/res) * contrib;
+      }
+      recon[n]=val;
+   }
+
+   double temp[];
+   ArrayResize(temp, res);
+   ArrayCopy(temp, recon);
+   int guard = MathMax(1, res / MathMax(2, levelsToShow*2));
+
+   LegSeg referenceLeg;
+   bool hasReference = (leg_count>0);
+   if(hasReference)
+      referenceLeg = legs[0];
+
+   for(int level=0; level<levelsToShow; level++)
+   {
+      int bestIdx=-1;
+      double bestValue=-1e100;
+      for(int i=0;i<res;i++)
+      {
+         if(temp[i] > bestValue)
+         {
+            bestValue = temp[i];
+            bestIdx = i;
+         }
+      }
+      if(bestIdx<0 || bestValue<=0.0)
+         break;
+      double norm = (double)bestIdx/(double)(res-1);
+      double price = minPrice + norm * range;
+      int pidx = ArraySize(outPrices);
+      ArrayResize(outPrices, pidx+1);
+      ArrayResize(outScores, pidx+1);
+      ArrayResize(outRatios, pidx+1);
+      ArrayResize(outLineCounts, pidx+1);
+      outPrices[pidx] = price;
+      outScores[pidx] = bestValue;
+      double ratio = -1.0;
+      if(hasReference)
+      {
+         ratio = ComputeRatioFromLeg(referenceLeg, price);
+         if(ratio>=0.0)
+            ratio = SnapRatioToFib(ratio, fibSnapTol);
+      }
+      outRatios[pidx] = ratio;
+      int start=MathMax(0, bestIdx-guard);
+      int end=MathMin(res-1, bestIdx+guard);
+
+      double lineCount=0.0;
+      for(int j=start;j<=end;j++)
+         lineCount += (j>=0 && j<ArraySize(series) ? series[j] : 0.0);
+      outLineCounts[pidx] = lineCount;
+
+      for(int i=start;i<=end;i++)
+         temp[i] = -1e100;
+   }
+
+   return (ArraySize(outPrices)>0);
 }
 
 bool BuildKMeansPriceClusters(const FibItem &all[], int all_total,
@@ -1261,8 +1556,11 @@ int OnCalculate(const int rates_total,
    g_renderer.PrepareFrame(time, rates_total, series);
    g_label_manager.BeginFrame();
    bool usingKMeans = (InpPriceMode==PRICE_KMEANS);
+   bool usingFFT = (InpPriceMode==PRICE_FFT);
    if(!usingKMeans)
       ClearKMeansLabels();
+   if(!usingFFT)
+      ClearFFTLabels();
 
    if(InpPriceMode==PRICE_RAW)
    {
@@ -1321,6 +1619,42 @@ int OnCalculate(const int rates_total,
          g_ctx.visible_cluster_lines = 0;
          g_overlay.ClearTrackedPriceLines();
          ClearKMeansLabels();
+      }
+   }
+   else if(InpPriceMode==PRICE_FFT)
+   {
+      double fftPrices[];
+      double fftScores[];
+      double fftRatios[];
+      double fftLineCounts[];
+      bool okFFT = BuildFFTPriceLevels(g_ctx.all, g_ctx.all_total,
+                                       g_ctx.view_price, ArraySize(g_ctx.view_price),
+                                       pricePipeline.legs, pricePipeline.leg_count,
+                                       InpFFTWindowLegs, InpFFTResolution,
+                                       InpFFTTopHarmonics, InpFFTLevelsToShow,
+                                       InpFFTMinAmplitude, InpFFTFibSnapTolerance,
+                                       fftPrices, fftScores, fftRatios, fftLineCounts);
+      g_overlay.ClearTrackedPriceLines();
+      if(okFFT)
+      {
+         g_ctx.cluster_group_count = ArraySize(fftPrices);
+         int lineWidth = MathMax(1, InpFibLineWidth);
+         for(int i=0;i<g_ctx.cluster_group_count;i++)
+         {
+            string name = G_PREF_FFT_LINE + IntegerToString(i);
+            g_overlay.UpsertPriceSegment(name, 0, 0, fftPrices[i], InpFFTLineColor, lineWidth);
+            g_overlay.RecordPriceLineName(name);
+         }
+         g_ctx.visible_cluster_lines = g_ctx.cluster_group_count;
+         RenderFFTLabels(fftPrices, fftScores, fftRatios, fftLineCounts,
+                         ArraySize(fftPrices),
+                         g_renderer.CurrentLabelRight());
+      }
+      else
+      {
+         g_ctx.cluster_group_count = 0;
+         g_ctx.visible_cluster_lines = 0;
+         ClearFFTLabels();
       }
    }
    else // PRICE_CLUSTER
@@ -1398,6 +1732,14 @@ int OnCalculate(const int rates_total,
             FiboUtils::FormatPercentValue(InpKMeansBandPctATR)
          );
       }
+      else if(InpPriceMode==PRICE_FFT)
+      {
+         ln1 = StringFormat(
+            "PRICE  Linhas:%d  FFTNíveis:%d  Harmônicos:%d  Resol=%d",
+            ArraySize(g_ctx.view_price), g_ctx.cluster_group_count,
+            InpFFTTopHarmonics, InpFFTResolution
+         );
+      }
       else
       {
          ln1 = StringFormat("PRICE  Linhas:%d  Modo RAW (clusters desligados)", ArraySize(g_ctx.view_price));
@@ -1415,6 +1757,12 @@ int OnCalculate(const int rates_total,
          ln2 = StringFormat("PRICE  R:%d  X:%d  MinK:%d  Pernas:%d  Topos:%d  Fundos:%d",
                             g_ctx.retrace_total, g_ctx.expansion_total, InpKMeansMinLines,
                             g_ctx.leg_total, g_ctx.pivot_tops, g_ctx.pivot_bottoms);
+      }
+      else if(InpPriceMode==PRICE_FFT)
+      {
+         ln2 = StringFormat("PRICE  R:%d  X:%d  FFTLegs:%d  Níveis:%d  Harmônicos:%d",
+                            g_ctx.retrace_total, g_ctx.expansion_total,
+                            InpFFTWindowLegs, InpFFTLevelsToShow, InpFFTTopHarmonics);
       }
       else
       {
