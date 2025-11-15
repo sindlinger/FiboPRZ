@@ -97,9 +97,8 @@ input int      InpKMeansClusterCount     = 3;     // número de centros (k)
 input int      InpKMeansMaxIterations    = 20;    // iterações máximas
 input int      InpKMeansMinLines         = 3;     // mínimo de linhas por cluster válido
 input double   InpKMeansBandPctATR       = 0.5;   // espessura máxima = % ATR(1D) (0 = auto)
-input double   InpKMeansFibSnapTolerance = 0.02;  // tolerância p/ encaixar razões (0 = desligado)
 
-input group   "FFT";
+input group   "FFT Preço";
 input int      InpFFTWindowLegs          = 40;    // pernas mais recentes consideradas
 input int      InpFFTResolution          = 128;   // bins (potência de 2 recomendada)
 input int      InpFFTTopHarmonics        = 5;     // harmônicos selecionados
@@ -107,7 +106,13 @@ input int      InpFFTLevelsToShow        = 5;     // quantos níveis exibir
 input double   InpFFTMinAmplitude        = 1.0;   // amplitude mínima do harmônico
 input color    InpFFTLineColor           = clrGold; // cor das linhas FFT
 
-input group   "Tempo FFT";
+input group   "Tempo";
+input bool     InpShowTimeFibs           = false;        // liga/desliga marcas de tempo
+input bool     InpShowTimeVLines         = true;         // além do ponto, desenhar VLINE
+input color    InpTimeDotColor           = clrSilver;
+input int      InpTimeDotFontSize        = 8;
+
+input group   "FFT Tempo";
 input bool     InpEnableFFTTime          = false;   // desenhar FFT no eixo temporal?
 input int      InpFFTTimeWindowLegs      = 40;      // pernas usadas
 input int      InpFFTTimeResolution      = 128;     // bins
@@ -131,12 +136,6 @@ input bool     InpLabelsMirrorLeft       = true;           // duplicar rótulos 
 input bool     InpLabelShowLeg           = true;           // incluir id da perna no rótulo
 input bool     InpUseRatioColors         = false;          // usar cores específicas por razão?
 input string   InpRatioColorMap          = "0.236=#66C2A5;0.382=#8DA0CB;0.500=#A6D854;0.618=#FFD92F;1.000=#E78AC3;1.618=#FC8D62"; // ratio[:R|X]=#RRGGBB separados por ';'
-
-input group   "Tempo";
-input bool     InpShowTimeFibs           = false;        // liga/desliga marcas de tempo
-input bool     InpShowTimeVLines         = true;         // além do ponto, desenhar VLINE
-input color    InpTimeDotColor           = clrSilver;
-input int      InpTimeDotFontSize        = 8;
 
 input group   "Diagnóstico";
 input int      InpRightTextMarginBars    = 6;      // margem à direita (texto)
@@ -1702,8 +1701,14 @@ int OnCalculate(const int rates_total,
    g_ctx.price_total = pricePipeline.price_count;
 
    // 2) Linhas PREÇO + TEMPO
-   if(InpShowTimeFibs){ BuildTimeMarks(pricePipeline.legs, pricePipeline.leg_count, g_ctx.time_all, g_ctx.time_total); }
-   else{ ArrayResize(g_ctx.time_all,0); g_ctx.time_total=0; }
+   bool needTimeData = (InpShowTimeFibs || InpEnableFFTTime);
+   if(needTimeData)
+      BuildTimeMarks(pricePipeline.legs, pricePipeline.leg_count, g_ctx.time_all, g_ctx.time_total);
+   else{
+      ArrayResize(g_ctx.time_all,0);
+      g_ctx.time_total=0;
+      ArrayResize(g_ctx.view_time,0);
+   }
 
    // 3) Base única + views
    BuildUnifiedFromLegacy(g_ctx.price_all, g_ctx.price_total,
