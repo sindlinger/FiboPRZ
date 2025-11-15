@@ -4,7 +4,6 @@
 #property strict
 #property indicator_chart_window
 #property indicator_plots 0
-
 // Core types and utils first, so includes podem ir ao topo
 #include "inc/Types.mqh"
 
@@ -18,7 +17,12 @@ void RenderKMeansClusterLabels(const double &centers[], const int &counts[],
                                datetime labelRight);
 void ClearFFTLabels();
 void RenderFFTLabels(const double &prices[], const double &scores[],
-                     const double &ratios[], int count, datetime labelRight);
+                     const double &ratios[], const double &counts[],
+                     int count, datetime labelRight);
+void ClearFFTTimeLabels();
+void RenderFFTTimeLabels(const datetime &times[], const double &scores[],
+                         const double &durationsBars[], int count);
+void ClearFFTTimeLines();
 // Utilidades
 #include "inc/FiboUtils.mqh"
 // Demais módulos
@@ -27,6 +31,9 @@ void RenderFFTLabels(const double &prices[], const double &scores[],
 #include "inc/ChartOverlayService.mqh"
 #include "inc/Renderer.mqh"
 #include "inc/PivotPipeline.mqh"
+#import "fft_bridge.dll"
+bool FFT_RealForward(const double &series[], int length, double &outRe[], double &outIm[]);
+#import
 
 // Singletons globais
 FiboContext g_ctx;
@@ -100,6 +107,15 @@ input int      InpFFTLevelsToShow        = 5;     // quantos níveis exibir
 input double   InpFFTMinAmplitude        = 1.0;   // amplitude mínima do harmônico
 input color    InpFFTLineColor           = clrGold; // cor das linhas FFT
 
+input group   "Tempo FFT";
+input bool     InpEnableFFTTime          = false;   // desenhar FFT no eixo temporal?
+input int      InpFFTTimeWindowLegs      = 40;      // pernas usadas
+input int      InpFFTTimeResolution      = 128;     // bins
+input int      InpFFTTimeTopHarmonics    = 5;       // harmônicos selecionados
+input int      InpFFTTimeLevelsToShow    = 5;       // quantos níveis
+input double   InpFFTTimeMinAmplitude    = 1.0;     // amplitude mínima
+input color    InpFFTTimeColor           = clrAqua; // cor das linhas temporais
+
 input group   "Exibição de Preço";
 input ENUM_PRICE_MODE InpPriceMode       = PRICE_CLUSTER; // modos: Cluster / Raw / K-Means
 input ENUM_LABEL_DISPLAY_MODE InpPriceLabelMode = LABEL_MODE_DEBUG; // modo de exibição dos rótulos
@@ -152,6 +168,8 @@ const string    G_PREF_DBG_TIME_VL = "FCZDBG_TIME_VL_";
 const string    G_PREF_KM_LABEL = "FCZKMLBL_";
 const string    G_PREF_FFT_LINE = "FCZFFTLINE_";
 const string    G_PREF_FFT_LABEL = "FCZFFTLBL_";
+const string    G_PREF_FFT_TIME_LINE = "FCZFFTTLINE_";
+const string    G_PREF_FFT_TIME_LABEL = "FCZFFTTL_";
 const double    RATIO_COLOR_TOL = 1e-6;
 
 // ========================= Utils =========================
@@ -542,6 +560,54 @@ void ClearFFTLines()
    g_ctx.prev_fft_line_count = 0;
 }
 
+void ClearFFTTimeLabels()
+{
+   for(int i=0;i<g_ctx.prev_fft_time_label_count;i++)
+      ObjectDelete(ChartID(), G_PREF_FFT_TIME_LABEL + IntegerToString(i));
+   g_ctx.prev_fft_time_label_count = 0;
+}
+
+void RenderFFTTimeLabels(const datetime &times[], const double &scores[],
+                         const double &durationsBars[], int count, double priceLevel)
+{
+   if(count<=0){
+      ClearFFTTimeLabels();
+      return;
+   }
+   int maxLabels = MathMin(count, 8);
+   int order[];
+   ArrayResize(order, count);
+   for(int i=0;i<count;i++) order[i]=i;
+   for(int a=0;a<count-1;a++){
+      int best=a;
+      for(int b=a+1;b<count;b++)
+         if(scores[order[b]] > scores[order[best]]) best=b;
+      if(best!=a){
+         int tmp=order[a]; order[a]=order[best]; order[best]=tmp;
+      }
+   }
+   for(int idx=0; idx<maxLabels; idx++)
+   {
+      int src = order[idx];
+      double bars = (ArraySize(durationsBars)>src ? durationsBars[src] : 0.0);
+      string text = StringFormat("FFT-T#%d Dur:%s barras",
+                                 idx+1,
+                                 FiboUtils::FormatGenericValue(bars, 2));
+      string name = G_PREF_FFT_TIME_LABEL + IntegerToString(idx);
+      g_overlay.UpsertText(name, times[src], priceLevel, text, InpFFTTimeColor, 8, ANCHOR_LEFT);
+   }
+   for(int i=maxLabels;i<g_ctx.prev_fft_time_label_count;i++)
+      ObjectDelete(ChartID(), G_PREF_FFT_TIME_LABEL + IntegerToString(i));
+   g_ctx.prev_fft_time_label_count = maxLabels;
+}
+
+void ClearFFTTimeLines()
+{
+   for(int i=0;i<g_ctx.prev_fft_time_line_count;i++)
+      ObjectDelete(ChartID(), G_PREF_FFT_TIME_LINE + IntegerToString(i));
+   g_ctx.prev_fft_time_line_count = 0;
+}
+
 double ComputeRatioFromLeg(const LegSeg &leg, double price)
 {
    double span = MathAbs(leg.p2 - leg.p1);
@@ -558,26 +624,6 @@ int NextPow2(int value)
    while(v<value && v<32768)
       v <<= 1;
    return v;
-}
-
-void ComputeDFTReal(const double &series[], int N, double &outRe[], double &outIm[])
-{
-   ArrayResize(outRe, N);
-   ArrayResize(outIm, N);
-   for(int k=0;k<N;k++)
-   {
-      double sumRe=0.0;
-      double sumIm=0.0;
-      for(int n=0;n<N;n++)
-      {
-         double angle = 2.0*M_PI*k*(double)n/(double)N;
-         double sample = series[n];
-         sumRe += sample * MathCos(angle);
-         sumIm -= sample * MathSin(angle);
-      }
-      outRe[k]=sumRe;
-      outIm[k]=sumIm;
-   }
 }
 
 bool BuildFFTPriceLevels(const FibItem &items[], int total_items,
@@ -649,7 +695,10 @@ bool BuildFFTPriceLevels(const FibItem &items[], int total_items,
    }
 
    double specRe[], specIm[];
-   ComputeDFTReal(series, res, specRe, specIm);
+   ArrayResize(specRe, res);
+   ArrayResize(specIm, res);
+   if(!FFT_RealForward(series, res, specRe, specIm))
+      return false;
 
    int nyquist = res/2;
    struct Harmonic { int idx; double amp; };
@@ -744,6 +793,152 @@ bool BuildFFTPriceLevels(const FibItem &items[], int total_items,
    }
 
    return (ArraySize(outPrices)>0);
+}
+
+bool BuildFFTTimeLevels(const LegSeg &legs[], int leg_count,
+                        int windowLegs, int resolution,
+                        int topHarmonics, int levelsToShow, double minAmplitude,
+                        int chartPeriodSeconds,
+                        datetime &outTimes[], double &outScores[], double &outDurBars[])
+{
+   ArrayResize(outTimes,0);
+   ArrayResize(outScores,0);
+   ArrayResize(outDurBars,0);
+   if(leg_count<=0 || resolution<=0 || topHarmonics<=0 || levelsToShow<=0)
+      return false;
+
+   int maxLegId=-1;
+   for(int i=0;i<leg_count;i++)
+      if(legs[i].id > maxLegId) maxLegId = legs[i].id;
+   if(maxLegId<0)
+      return false;
+   int window = MathMax(1, windowLegs);
+   int threshold = MathMax(0, maxLegId - window + 1);
+
+   double durations[];
+   ArrayResize(durations, 0);
+   double minDur = DBL_MAX, maxDur = -DBL_MAX;
+   for(int i=0;i<leg_count;i++)
+   {
+      if(legs[i].id < threshold) continue;
+      long dt = (long)legs[i].t2 - (long)legs[i].t1;
+      double seconds = (double)MathAbs(dt);
+      if(seconds <= 0.0) continue;
+      int idx = ArraySize(durations);
+      ArrayResize(durations, idx+1);
+      durations[idx] = seconds;
+      if(seconds < minDur) minDur = seconds;
+      if(seconds > maxDur) maxDur = seconds;
+   }
+   if(ArraySize(durations)<=0)
+      return false;
+   double range = maxDur - minDur;
+   if(range <= 1.0)
+      return false;
+
+   int res = NextPow2(MathMax(16, resolution));
+   double series[];
+   ArrayResize(series, res);
+   for(int i=0;i<res;i++) series[i]=0.0;
+   for(int i=0;i<ArraySize(durations);i++)
+   {
+      double norm = (durations[i] - minDur)/range;
+      norm = MathMax(0.0, MathMin(1.0, norm));
+      int idx = (int)MathRound(norm * (res-1));
+      if(idx<0) idx=0;
+      if(idx>=res) idx=res-1;
+      series[idx] += 1.0;
+   }
+
+   double specRe[], specIm[];
+   ArrayResize(specRe, res);
+   ArrayResize(specIm, res);
+   if(!FFT_RealForward(series, res, specRe, specIm))
+      return false;
+
+   int nyquist = res/2;
+   struct Harmonic { int idx; double amp; };
+   Harmonic h[]; ArrayResize(h,0);
+   for(int k=1;k<nyquist;k++)
+   {
+      double amp = MathSqrt(specRe[k]*specRe[k] + specIm[k]*specIm[k]);
+      if(amp < minAmplitude)
+         continue;
+      int pos = ArraySize(h);
+      ArrayResize(h, pos+1);
+      h[pos].idx = k;
+      h[pos].amp = amp;
+   }
+   if(ArraySize(h)==0)
+      return false;
+   for(int a=0;a<ArraySize(h)-1;a++){
+      int best=a;
+      for(int b=a+1;b<ArraySize(h);b++) if(h[b].amp > h[best].amp) best=b;
+      if(best!=a){ Harmonic t=h[a]; h[a]=h[best]; h[best]=t; }
+   }
+   int selected = MathMin(topHarmonics, ArraySize(h));
+   if(selected<=0)
+      return false;
+   int selectedIdx[];
+   ArrayResize(selectedIdx, selected);
+   for(int i=0;i<selected;i++) selectedIdx[i]=h[i].idx;
+
+   double recon[];
+   ArrayResize(recon, res);
+   for(int n=0;n<res;n++)
+   {
+      double val = specRe[0]/res;
+      for(int i=0;i<selected;i++)
+      {
+         int k = selectedIdx[i];
+         double angle = 2.0*M_PI*k*(double)n/(double)res;
+         double contrib = (specRe[k]*MathCos(angle) - specIm[k]*MathSin(angle));
+         val += (2.0/res) * contrib;
+      }
+      recon[n]=val;
+   }
+
+   double temp[];
+   ArrayResize(temp, res);
+   ArrayCopy(temp, recon);
+   int guard = MathMax(1, res / MathMax(2, levelsToShow*2));
+   datetime baseTime = (leg_count>0 ? legs[0].t2 : TimeCurrent());
+
+   for(int level=0; level<levelsToShow; level++)
+   {
+      int bestIdx=-1;
+      double bestValue=-1e100;
+      for(int i=0;i<res;i++)
+      {
+         if(temp[i] > bestValue)
+         {
+            bestValue = temp[i];
+            bestIdx = i;
+         }
+      }
+      if(bestIdx<0 || bestValue<=0.0)
+         break;
+      double norm = (double)bestIdx/(double)(res-1);
+      double durationSec = minDur + norm * range;
+      if(durationSec<=0.0)
+         continue;
+
+      datetime target = (datetime)((long)baseTime + (long)MathRound(durationSec));
+      int idx = ArraySize(outTimes);
+      ArrayResize(outTimes, idx+1);
+      ArrayResize(outScores, idx+1);
+      ArrayResize(outDurBars, idx+1);
+      outTimes[idx] = target;
+      outScores[idx] = bestValue;
+      double ps = (double)MathMax(1, chartPeriodSeconds);
+      outDurBars[idx] = durationSec/ps;
+
+      int start=MathMax(0, bestIdx-guard);
+      int end=MathMin(res-1, bestIdx+guard);
+      for(int i=start;i<=end;i++)
+         temp[i] = -1e100;
+   }
+   return (ArraySize(outTimes)>0);
 }
 
 bool BuildKMeansPriceClusters(const FibItem &all[], int all_total,
@@ -1694,9 +1889,45 @@ int OnCalculate(const int rates_total,
    }
 
    // 5.1) Debug overlays independent das janelas/filtros
-   g_renderer.RenderDebugOverlays(g_ctx.price_all, g_ctx.price_total,
-                                  g_ctx.time_all, g_ctx.time_total,
-                                  time, rates_total);
+      g_renderer.RenderDebugOverlays(g_ctx.price_all, g_ctx.price_total,
+                                     g_ctx.time_all, g_ctx.time_total,
+                                     time, rates_total);
+
+   // FFT temporal
+   if(InpEnableFFTTime)
+   {
+      double fftTimes[];
+      double fftScores[];
+      double fftDurBars[];
+      int ps = PeriodSeconds(); if(ps<=0) ps=60;
+      bool okTimeFFT = BuildFFTTimeLevels(pricePipeline.legs, pricePipeline.leg_count,
+                                          InpFFTTimeWindowLegs, InpFFTTimeResolution,
+                                          InpFFTTimeTopHarmonics, InpFFTTimeLevelsToShow,
+                                          InpFFTTimeMinAmplitude, ps,
+                                          fftTimes, fftScores, fftDurBars);
+      ClearFFTTimeLines();
+      if(okTimeFFT)
+      {
+         int lines = ArraySize(fftTimes);
+         g_ctx.prev_fft_time_line_count = lines;
+         for(int i=0;i<lines;i++)
+         {
+            string name = G_PREF_FFT_TIME_LINE + IntegerToString(i);
+            g_overlay.UpsertVLine(name, fftTimes[i], InpFFTTimeColor, 1, true);
+         }
+         double priceBase = (pricePipeline.leg_count>0 ? pricePipeline.legs[0].p2 : close[0]);
+         RenderFFTTimeLabels(fftTimes, fftScores, fftDurBars, lines, priceBase);
+      }
+      else
+      {
+         ClearFFTTimeLabels();
+      }
+   }
+   else
+   {
+      ClearFFTTimeLines();
+      ClearFFTTimeLabels();
+   }
 
    // 6) RESUMO (visor)
    if(InpShowSummary)
