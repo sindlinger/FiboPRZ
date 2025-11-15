@@ -795,44 +795,41 @@ bool BuildFFTPriceLevels(const FibItem &items[], int total_items,
    return (ArraySize(outPrices)>0);
 }
 
-bool BuildFFTTimeLevels(const LegSeg &legs[], int leg_count,
-                        int windowLegs, int resolution,
+bool BuildFFTTimeLevels(const FibItem &items[], int total_items,
+                        const int &view_time_idx[], int view_time_count,
+                        int windowEntries, int resolution,
                         int topHarmonics, int levelsToShow, double minAmplitude,
                         int chartPeriodSeconds,
+                        datetime currentTime,
                         datetime &outTimes[], double &outScores[], double &outDurBars[])
 {
    ArrayResize(outTimes,0);
    ArrayResize(outScores,0);
    ArrayResize(outDurBars,0);
-   if(leg_count<=0 || resolution<=0 || topHarmonics<=0 || levelsToShow<=0)
+   if(view_time_count<=0 || resolution<=0 || topHarmonics<=0 || levelsToShow<=0)
       return false;
 
-   int maxLegId=-1;
-   for(int i=0;i<leg_count;i++)
-      if(legs[i].id > maxLegId) maxLegId = legs[i].id;
-   if(maxLegId<0)
-      return false;
-   int window = MathMax(1, windowLegs);
-   int threshold = MathMax(0, maxLegId - window + 1);
-
-   double durations[];
-   ArrayResize(durations, 0);
-   double minDur = DBL_MAX, maxDur = -DBL_MAX;
-   for(int i=0;i<leg_count;i++)
+   double samples[];
+   ArrayResize(samples, 0);
+   double minVal = DBL_MAX, maxVal = -DBL_MAX;
+   int limit = MathMax(1, windowEntries);
+   int startIdx = MathMax(0, view_time_count - limit);
+   for(int i=startIdx;i<view_time_count;i++)
    {
-      if(legs[i].id < threshold) continue;
-      long dt = (long)legs[i].t2 - (long)legs[i].t1;
-      double seconds = (double)MathAbs(dt);
-      if(seconds <= 0.0) continue;
-      int idx = ArraySize(durations);
-      ArrayResize(durations, idx+1);
-      durations[idx] = seconds;
-      if(seconds < minDur) minDur = seconds;
-      if(seconds > maxDur) maxDur = seconds;
+      int idx = view_time_idx[i];
+      if(idx<0 || idx>=total_items) continue;
+      const FibItem item = items[idx];
+      if(item.kind!=FIBK_TIME) continue;
+      double v = (double)((long)item.t);
+      int pos = ArraySize(samples);
+      ArrayResize(samples, pos+1);
+      samples[pos] = v;
+      if(v < minVal) minVal = v;
+      if(v > maxVal) maxVal = v;
    }
-   if(ArraySize(durations)<=0)
+   if(ArraySize(samples)<=0)
       return false;
-   double range = maxDur - minDur;
+   double range = maxVal - minVal;
    if(range <= 1.0)
       return false;
 
@@ -840,9 +837,9 @@ bool BuildFFTTimeLevels(const LegSeg &legs[], int leg_count,
    double series[];
    ArrayResize(series, res);
    for(int i=0;i<res;i++) series[i]=0.0;
-   for(int i=0;i<ArraySize(durations);i++)
+   for(int i=0;i<ArraySize(samples);i++)
    {
-      double norm = (durations[i] - minDur)/range;
+      double norm = (samples[i] - minVal)/range;
       norm = MathMax(0.0, MathMin(1.0, norm));
       int idx = (int)MathRound(norm * (res-1));
       if(idx<0) idx=0;
@@ -902,7 +899,7 @@ bool BuildFFTTimeLevels(const LegSeg &legs[], int leg_count,
    ArrayResize(temp, res);
    ArrayCopy(temp, recon);
    int guard = MathMax(1, res / MathMax(2, levelsToShow*2));
-   datetime baseTime = (leg_count>0 ? legs[0].t2 : TimeCurrent());
+   datetime baseTime = currentTime;
 
    for(int level=0; level<levelsToShow; level++)
    {
@@ -919,11 +916,8 @@ bool BuildFFTTimeLevels(const LegSeg &legs[], int leg_count,
       if(bestIdx<0 || bestValue<=0.0)
          break;
       double norm = (double)bestIdx/(double)(res-1);
-      double durationSec = minDur + norm * range;
-      if(durationSec<=0.0)
-         continue;
-
-      datetime target = (datetime)((long)baseTime + (long)MathRound(durationSec));
+      double secondsVal = minVal + norm * range;
+      datetime target = (datetime)((long)MathRound(secondsVal));
       int idx = ArraySize(outTimes);
       ArrayResize(outTimes, idx+1);
       ArrayResize(outScores, idx+1);
@@ -931,7 +925,8 @@ bool BuildFFTTimeLevels(const LegSeg &legs[], int leg_count,
       outTimes[idx] = target;
       outScores[idx] = bestValue;
       double ps = (double)MathMax(1, chartPeriodSeconds);
-      outDurBars[idx] = durationSec/ps;
+      double secondsOffset = (double)((long)target - (long)currentTime);
+      outDurBars[idx] = (secondsOffset/ps);
 
       int start=MathMax(0, bestIdx-guard);
       int end=MathMin(res-1, bestIdx+guard);
@@ -1896,14 +1891,16 @@ int OnCalculate(const int rates_total,
    // FFT temporal
    if(InpEnableFFTTime)
    {
-      double fftTimes[];
+      datetime fftTimes[];
       double fftScores[];
       double fftDurBars[];
       int ps = PeriodSeconds(); if(ps<=0) ps=60;
-      bool okTimeFFT = BuildFFTTimeLevels(pricePipeline.legs, pricePipeline.leg_count,
+      datetime refTime = (rates_total>0 ? time[series? 0 : rates_total-1] : TimeCurrent());
+      bool okTimeFFT = BuildFFTTimeLevels(g_ctx.all, g_ctx.all_total,
+                                          g_ctx.view_time, ArraySize(g_ctx.view_time),
                                           InpFFTTimeWindowLegs, InpFFTTimeResolution,
                                           InpFFTTimeTopHarmonics, InpFFTTimeLevelsToShow,
-                                          InpFFTTimeMinAmplitude, ps,
+                                          InpFFTTimeMinAmplitude, ps, refTime,
                                           fftTimes, fftScores, fftDurBars);
       ClearFFTTimeLines();
       if(okTimeFFT)
