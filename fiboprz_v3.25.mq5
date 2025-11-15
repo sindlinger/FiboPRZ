@@ -1120,25 +1120,6 @@ bool BuildKMeansPriceClusters(const FibItem &all[], int all_total,
             avgRatio = ratioSum/(double)ratioCount;
       }
 
-      double snappedRatio = avgRatio;
-      if(avgRatio>0.0 && fibCount>0 && fibTolerance>0.0)
-      {
-         double bestDiff = DBL_MAX;
-         double bestRatio = avgRatio;
-         for(int f=0;f<fibCount;f++)
-         {
-            double target = fibLevels[f];
-            double diff = MathAbs(target - avgRatio);
-            if(diff < bestDiff)
-            {
-               bestDiff = diff;
-               bestRatio = target;
-            }
-         }
-         if(bestDiff <= fibTolerance)
-            snappedRatio = bestRatio;
-      }
-
       outResult.cluster_count++;
       int infoIdx = ArraySize(clusterCentersOut);
       ArrayResize(clusterCentersOut, infoIdx+1);
@@ -1146,7 +1127,7 @@ bool BuildKMeansPriceClusters(const FibItem &all[], int all_total,
       ArrayResize(clusterRatiosOut, infoIdx+1);
       clusterCentersOut[infoIdx] = centroids[c];
       clusterCountsOut[infoIdx] = memberCount;
-      clusterRatiosOut[infoIdx] = snappedRatio;
+      clusterRatiosOut[infoIdx] = avgRatio;
 
       for(int i=0;i<memberCount;i++)
       {
