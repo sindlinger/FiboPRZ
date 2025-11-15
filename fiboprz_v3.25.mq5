@@ -939,7 +939,7 @@ bool BuildKMeansPriceClusters(const FibItem &all[], int all_total,
                               const int &view_idx[], int view_count,
                               int clusterCount, int maxIterations, int minLines,
                               double bandThickness,
-                              const double &fibLevels[], int fibCount, double fibTolerance,
+                              const double &fibLevels[], int fibCount,
                               ClusterResult &outResult,
                               double &clusterCentersOut[], int &clusterCountsOut[], double &clusterRatiosOut[])
 {
@@ -1772,7 +1772,6 @@ int OnCalculate(const int rates_total,
                                            InpKMeansMinLines,
                                            kmBandRange,
                                            g_ctx.fib_ratios, ArraySize(g_ctx.fib_ratios),
-                                           InpKMeansFibSnapTolerance,
                                            kmRes,
                                            kmCenters, kmCounts, kmRatios);
       if(okKM)
