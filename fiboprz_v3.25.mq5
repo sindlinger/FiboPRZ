@@ -98,7 +98,6 @@ input int      InpFFTResolution          = 128;   // bins (potência de 2 recome
 input int      InpFFTTopHarmonics        = 5;     // harmônicos selecionados
 input int      InpFFTLevelsToShow        = 5;     // quantos níveis exibir
 input double   InpFFTMinAmplitude        = 1.0;   // amplitude mínima do harmônico
-input double   InpFFTFibSnapTolerance    = 0.0;   // tolerância para encaixar ratios
 input color    InpFFTLineColor           = clrGold; // cor das linhas FFT
 
 input group   "Exibição de Preço";
@@ -546,25 +545,6 @@ double ComputeRatioFromLeg(const LegSeg &leg, double price)
    return (price - leg.p2)/span;
 }
 
-double SnapRatioToFib(double ratio, double tolerance)
-{
-   if(ratio<0.0 || tolerance<=0.0 || ArraySize(g_ctx.fib_ratios)<=0)
-      return ratio;
-   double best = ratio;
-   double bestDiff = tolerance;
-   for(int i=0;i<ArraySize(g_ctx.fib_ratios);i++)
-   {
-      double target = g_ctx.fib_ratios[i];
-      double diff = MathAbs(target - ratio);
-      if(diff < bestDiff)
-      {
-         bestDiff = diff;
-         best = target;
-      }
-   }
-   return best;
-}
-
 int NextPow2(int value)
 {
    int v = 1;
@@ -598,7 +578,6 @@ bool BuildFFTPriceLevels(const FibItem &items[], int total_items,
                          const LegSeg &legs[], int leg_count,
                          int windowLegs, int resolution,
                          int topHarmonics, int levelsToShow, double minAmplitude,
-                         double fibSnapTol,
                          double &outPrices[], double &outScores[], double &outRatios[],
                          double &outLineCounts[])
 {
@@ -743,11 +722,7 @@ bool BuildFFTPriceLevels(const FibItem &items[], int total_items,
       outScores[pidx] = bestValue;
       double ratio = -1.0;
       if(hasReference)
-      {
          ratio = ComputeRatioFromLeg(referenceLeg, price);
-         if(ratio>=0.0)
-            ratio = SnapRatioToFib(ratio, fibSnapTol);
-      }
       outRatios[pidx] = ratio;
       int start=MathMax(0, bestIdx-guard);
       int end=MathMin(res-1, bestIdx+guard);
@@ -1632,7 +1607,7 @@ int OnCalculate(const int rates_total,
                                        pricePipeline.legs, pricePipeline.leg_count,
                                        InpFFTWindowLegs, InpFFTResolution,
                                        InpFFTTopHarmonics, InpFFTLevelsToShow,
-                                       InpFFTMinAmplitude, InpFFTFibSnapTolerance,
+                                       InpFFTMinAmplitude,
                                        fftPrices, fftScores, fftRatios, fftLineCounts);
       g_overlay.ClearTrackedPriceLines();
       if(okFFT)
