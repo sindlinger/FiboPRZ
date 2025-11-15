@@ -535,6 +535,13 @@ void RenderFFTLabels(const double &prices[], const double &scores[],
    g_ctx.prev_fft_label_count = maxLabels;
 }
 
+void ClearFFTLines()
+{
+   for(int i=0;i<g_ctx.prev_fft_line_count;i++)
+      ObjectDelete(ChartID(), G_PREF_FFT_LINE + IntegerToString(i));
+   g_ctx.prev_fft_line_count = 0;
+}
+
 double ComputeRatioFromLeg(const LegSeg &leg, double price)
 {
    double span = MathAbs(leg.p2 - leg.p1);
@@ -1534,8 +1541,10 @@ int OnCalculate(const int rates_total,
    bool usingFFT = (InpPriceMode==PRICE_FFT);
    if(!usingKMeans)
       ClearKMeansLabels();
-   if(!usingFFT)
+   if(!usingFFT){
       ClearFFTLabels();
+      ClearFFTLines();
+   }
 
    if(InpPriceMode==PRICE_RAW)
    {
@@ -1610,6 +1619,7 @@ int OnCalculate(const int rates_total,
                                        InpFFTMinAmplitude,
                                        fftPrices, fftScores, fftRatios, fftLineCounts);
       g_overlay.ClearTrackedPriceLines();
+      ClearFFTLines();
       if(okFFT)
       {
          g_ctx.cluster_group_count = ArraySize(fftPrices);
@@ -1620,6 +1630,7 @@ int OnCalculate(const int rates_total,
             g_overlay.UpsertPriceSegment(name, 0, 0, fftPrices[i], InpFFTLineColor, lineWidth);
             g_overlay.RecordPriceLineName(name);
          }
+         g_ctx.prev_fft_line_count = g_ctx.cluster_group_count;
          g_ctx.visible_cluster_lines = g_ctx.cluster_group_count;
          RenderFFTLabels(fftPrices, fftScores, fftRatios, fftLineCounts,
                          ArraySize(fftPrices),
@@ -1630,6 +1641,7 @@ int OnCalculate(const int rates_total,
          g_ctx.cluster_group_count = 0;
          g_ctx.visible_cluster_lines = 0;
          ClearFFTLabels();
+         ClearFFTLines();
       }
    }
    else // PRICE_CLUSTER

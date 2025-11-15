@@ -112,6 +112,7 @@ struct FiboContext
    int cluster_group_count;
    int prev_kmeans_label_count;
    int prev_fft_label_count;
+   int prev_fft_line_count;
    int pivot_total;
    int pivot_tops;
    int pivot_bottoms;
@@ -162,6 +163,7 @@ struct FiboContext
       cluster_group_count = 0;
       prev_kmeans_label_count = 0;
       prev_fft_label_count = 0;
+      prev_fft_line_count = 0;
       pivot_total = 0;
       pivot_tops = 0;
       pivot_bottoms = 0;
